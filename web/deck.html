@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#04080d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hallway">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
+<title>Hallway Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#060b12; --panel:rgba(12,22,34,.72); --line:rgba(94,242,255,.16); --line2:rgba(94,242,255,.32);
+  --cyan:#5ef2ff; --amber:#ffb547; --red:#ff5470; --green:#62ffa8; --violet:#9b8cff;
+  --text:#d6f3fb; --dim:#7b97a6; --faint:#3f5664;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Space Grotesk",ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#03060a;color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+body{min-height:100vh}
+button,textarea{font:inherit;color:inherit}
+.hud{font-family:var(--mono);text-transform:uppercase;letter-spacing:.14em;font-size:11px;color:var(--dim)}
+.glow{text-shadow:0 0 12px rgba(94,242,255,.55)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:8px;vertical-align:1px}
+@keyframes blink{50%{opacity:.25}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes spinr{to{transform:rotate(-360deg)}}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes dash{to{stroke-dashoffset:-40}}
+@keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
+.view{display:none}
+.view.on{display:block}
+.scan{position:fixed;inset:0;pointer-events:none;z-index:50;background:repeating-linear-gradient(to bottom,rgba(255,255,255,.016) 0 1px,transparent 1px 3px)}
+
+/* --- top bar (desktop views) --- */
+.top{position:fixed;left:0;right:0;top:0;height:58px;display:flex;align-items:center;gap:18px;padding:0 24px;border-bottom:1px solid var(--line);
+  background:linear-gradient(to bottom,rgba(8,16,24,.96),rgba(8,16,24,.75));backdrop-filter:blur(8px);z-index:20}
+.logo{font:700 17px var(--sans);letter-spacing:.32em;color:#fff;white-space:nowrap}
+.logo i{font-style:normal;color:var(--cyan)}
+.chips{display:flex;gap:10px;margin:0 auto}
+.chip{font:500 10.5px var(--mono);letter-spacing:.14em;color:var(--text);padding:6px 11px;border:1px solid var(--line2);border-radius:2px;background:rgba(94,242,255,.04);white-space:nowrap}
+.chip.am{border-color:rgba(255,181,71,.5);color:var(--amber);background:rgba(255,181,71,.06)}
+.chip.rd{border-color:rgba(255,84,112,.45);color:var(--red);background:rgba(255,84,112,.06)}
+.chip.zero{opacity:.45}
+.tabs{display:flex;gap:2px;border:1px solid var(--line);border-radius:3px;padding:2px}
+.tabs a{font:600 10px var(--mono);letter-spacing:.16em;color:var(--dim);text-decoration:none;padding:6px 10px;border-radius:2px}
+.tabs a.on{background:rgba(94,242,255,.12);color:var(--cyan)}
+.clock{font:500 13px var(--mono);color:var(--cyan);letter-spacing:.12em;white-space:nowrap}
+.stale{color:var(--red)!important}
+
+/* --- panels --- */
+.panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:4px;backdrop-filter:blur(6px);display:flex;flex-direction:column}
+.panel::before,.panel::after{content:"";position:absolute;width:14px;height:14px;border:2px solid var(--cyan);opacity:.8;pointer-events:none}
+.panel::before{left:-1px;top:-1px;border-right:0;border-bottom:0}
+.panel::after{right:-1px;bottom:-1px;border-left:0;border-top:0}
+.ph{display:flex;justify-content:space-between;align-items:center;padding:14px 16px 10px;border-bottom:1px solid var(--line);flex:none}
+.ph .t{font:600 11px var(--mono);letter-spacing:.2em;color:var(--cyan)}
+.ph .c{font:500 10px var(--mono);color:var(--dim);letter-spacing:.12em}
+.scroll{overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:#1c3442 transparent}
+
+/* needs-you cards (shared) */
+.need{margin:12px 14px;padding:13px 14px 12px;border:1px solid rgba(255,181,71,.35);border-left:3px solid var(--amber);background:linear-gradient(90deg,rgba(255,181,71,.10),rgba(255,181,71,.02));border-radius:3px}
+.need.block{border-color:rgba(255,84,112,.35);border-left-color:var(--red);background:linear-gradient(90deg,rgba(255,84,112,.10),rgba(255,84,112,.02))}
+.need .n1{font:600 10px var(--mono);letter-spacing:.14em;color:var(--amber);display:flex;justify-content:space-between;gap:8px}
+.need.block .n1{color:var(--red)}
+.need .n2{font:600 14.5px var(--sans);color:#fff;margin:7px 0 5px}
+.need .n3{font:400 12.5px/1.45 var(--sans);color:#b9d3dd}
+.act{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.btn{all:unset;cursor:pointer;font:600 10px var(--mono);letter-spacing:.14em;padding:7px 10px;border:1px solid var(--line2);color:var(--cyan);border-radius:2px;background:rgba(94,242,255,.05)}
+.btn:hover{background:rgba(94,242,255,.12)}
+.btn.p{background:var(--amber);border-color:var(--amber);color:#1a1000}
+.btn.p:hover{filter:brightness(1.08)}
+.reply{margin-top:10px;display:none}
+.reply.on{display:block}
+.reply textarea{width:100%;min-height:64px;resize:vertical;background:rgba(0,0,0,.35);border:1px solid var(--line2);border-radius:3px;color:#fff;padding:9px;font:400 13px/1.4 var(--sans);outline:none}
+.reply textarea:focus{border-color:var(--cyan)}
+.sent{font:500 10.5px var(--mono);letter-spacing:.08em;color:var(--green);margin-top:8px}
+.empty{padding:26px 18px;font:400 13px/1.55 var(--sans);color:var(--dim)}
+.empty b{display:block;font:600 15px var(--sans);color:#e6fbff;margin-bottom:6px}
+.sec{font:600 10px var(--mono);letter-spacing:.2em;color:var(--dim);margin:18px 16px 4px;display:flex;justify-content:space-between}
+.ship{display:flex;gap:10px;align-items:flex-start;margin:9px 16px;font:400 12.5px/1.4 var(--sans);color:#a9c3cd}
+.ship b{color:#e9fbff;font-weight:600}
+.ship .k{font:500 10px var(--mono);color:var(--green);letter-spacing:.1em;white-space:nowrap;margin-top:2px;min-width:50px}
+.msg{padding:11px 16px 12px;border-bottom:1px solid rgba(94,242,255,.07)}
+.msg.new{animation:rise .5s ease both;background:linear-gradient(90deg,rgba(94,242,255,.10),transparent)}
+.msg .r{display:flex;justify-content:space-between;gap:8px;font:500 10px var(--mono);letter-spacing:.08em;color:var(--dim)}
+.msg .who{min-width:0;color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg .who em{font-style:normal;color:var(--faint);margin:0 5px}
+.msg .who .me{color:var(--amber)}
+.msg .s{font:600 13px var(--sans);color:#fff;margin:5px 0 3px}
+.msg .b{font:400 12px/1.45 var(--sans);color:#a6c0ca;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.cur::after{content:"▍";color:var(--cyan);animation:blink 1s steps(1) infinite;margin-left:1px}
+
+/* --- deck --- */
+#deck{position:fixed;inset:0;background:radial-gradient(ellipse 60% 70% at 50% 52%,#0b1a26 0%,#060b12 60%,#03060a 100%)}
+#deck .left{left:22px;top:80px;width:318px;bottom:22px}
+#deck .right{right:22px;top:80px;width:340px;bottom:22px}
+#orbWrap{position:absolute;left:356px;right:378px;top:66px;bottom:130px;display:flex;align-items:center;justify-content:center}
+#orb{width:100%;height:100%}
+#deck .bottom{position:absolute;left:376px;right:398px;bottom:22px;height:92px}
+#nodeTip{position:fixed;pointer-events:none;z-index:40;max-width:300px;padding:11px 13px;border:1px solid var(--line2);background:rgba(6,14,22,.96);border-radius:4px;font:400 12px/1.45 var(--sans);color:#bcd6df;display:none}
+#nodeTip b{display:block;color:#fff;font-size:13.5px;margin-bottom:3px}
+#nodeTip .k{font:600 9.5px var(--mono);letter-spacing:.14em;margin-bottom:6px}
+
+/* --- wall --- */
+#wall{padding:84px 28px 30px;min-height:100vh;background:linear-gradient(160deg,#07101a 0%,#050a10 100%);position:relative}
+#wall h1{margin:0 0 6px;font:600 28px var(--sans);color:#fff}
+#wall .sub{font:400 14px var(--sans);color:#93afba;margin-bottom:20px}
+#wall .sub b{color:var(--amber);font-weight:600}
+.wallg{display:grid;grid-template-columns:110px repeat(5,minmax(170px,1fr));gap:10px;position:relative}
+.colh{font:600 10.5px var(--mono);letter-spacing:.18em;color:var(--dim);display:flex;align-items:center;border-bottom:1px solid var(--line);padding:0 0 8px;position:sticky;top:58px;background:#060c13;z-index:3}
+.rowh{font:700 12px var(--mono);letter-spacing:.2em;color:#e6f8fc;border-right:1px solid var(--line);padding:10px 10px 10px 0;word-break:break-word}
+.rowh small{display:block;font:500 10px var(--mono);color:var(--dim);margin-top:4px;letter-spacing:.1em}
+.cell{display:flex;flex-direction:column;gap:8px;padding:2px;min-height:40px}
+.card{position:relative;z-index:2;padding:11px 12px;border:1px solid var(--line);border-radius:4px;background:rgba(13,26,40,.9)}
+.card .ct{font:600 13px var(--sans);color:#f2fdff}
+.card .cs{font:400 11.5px/1.4 var(--sans);color:#9cb7c2;margin-top:4px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.card .cm{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.tag{font:500 9.5px var(--mono);letter-spacing:.06em;color:var(--dim);padding:2px 6px;border:1px solid rgba(94,242,255,.14);border-radius:2px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card.wait{border-color:rgba(255,181,71,.55);box-shadow:0 0 26px rgba(255,181,71,.12)}
+.card.block{border-color:rgba(255,84,112,.55);box-shadow:0 0 24px rgba(255,84,112,.12)}
+.card.done,.card.off{opacity:.6}
+.card.idle{padding:8px 11px}
+.card.idle .cs{-webkit-line-clamp:1}
+.card.idle .cm{display:none}
+.card .bar{height:2px;margin-top:9px;background:rgba(94,242,255,.12);overflow:hidden;border-radius:2px}
+.card .bar i{display:block;height:100%;width:40%;background:linear-gradient(90deg,transparent,var(--cyan),transparent);animation:sweep 2.4s linear infinite}
+#wall svg.flows{position:absolute;left:0;top:0;pointer-events:none;z-index:1;overflow:visible}
+
+/* --- focus --- */
+#focus{min-height:100vh;padding:58px 20px 40px;background:radial-gradient(ellipse 70% 60% at 50% 30%,#10202d 0%,#060b12 55%,#020407 100%);position:relative;overflow:hidden}
+#focus .greet{text-align:center;margin-top:48px}
+#focus .greet .k{font:500 11px var(--mono);letter-spacing:.3em;color:var(--cyan)}
+#focus .greet h2{font:300 clamp(30px,4.4vw,54px)/1.1 var(--sans);margin:16px 0 10px;color:#fff;letter-spacing:-.02em}
+#focus .greet h2 b{font-weight:600;color:var(--amber)}
+#focus .greet p{font:400 17px var(--sans);color:#93afba;margin:0}
+#focus svg.wave{display:block;width:100%;height:80px;margin:22px 0 10px}
+.focus{max-width:760px;margin:0 auto;padding:28px 32px 26px;border:1px solid rgba(255,181,71,.45);border-radius:10px;
+  background:linear-gradient(180deg,rgba(28,24,14,.75),rgba(12,18,26,.85));box-shadow:0 30px 90px rgba(0,0,0,.5),0 0 90px rgba(255,181,71,.08)}
+.focus.block{border-color:rgba(255,84,112,.45);box-shadow:0 30px 90px rgba(0,0,0,.5),0 0 90px rgba(255,84,112,.08)}
+.focus .who{display:flex;align-items:center;gap:14px}
+.focus .who .nm{font:600 16px var(--sans);color:#fff}
+.focus .who .mt{font:500 10.5px var(--mono);letter-spacing:.12em;color:var(--dim);margin-top:4px}
+.focus .q{font:500 clamp(19px,2.2vw,25px)/1.32 var(--sans);color:#fff;margin:22px 0 14px}
+.focus ul{margin:0 0 20px;padding:0;list-style:none}
+.focus li{font:400 14px/1.5 var(--sans);color:#a9c4ce;padding-left:20px;position:relative;margin:5px 0}
+.focus li::before{content:"";position:absolute;left:2px;top:10px;width:8px;height:1px;background:var(--cyan)}
+.focus li em{font-style:normal;color:var(--faint);font-family:var(--mono);font-size:11px;margin-right:6px}
+.fb{all:unset;cursor:pointer;font:600 13px var(--sans);padding:11px 16px;border-radius:6px;border:1px solid var(--line2);color:var(--text);background:rgba(255,255,255,.03)}
+.fb:hover{background:rgba(255,255,255,.07)}
+.fb.p{background:var(--amber);border-color:var(--amber);color:#1b1100;box-shadow:0 0 30px rgba(255,181,71,.3)}
+.focus textarea{width:100%;min-height:80px;margin:4px 0 12px;background:rgba(0,0,0,.35);border:1px solid var(--line2);border-radius:6px;color:#fff;padding:12px;font:400 14px/1.45 var(--sans);outline:none;resize:vertical}
+.focus .acts{display:flex;gap:10px;flex-wrap:wrap}
+.queue{max-width:760px;margin:18px auto 0;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.qc{all:unset;cursor:pointer;padding:12px 15px;border:1px solid var(--line);border-radius:8px;background:rgba(12,22,34,.6)}
+.qc.cur{border-color:var(--line2)}
+.qc .a{font:500 10px var(--mono);letter-spacing:.14em;color:var(--amber)}
+.qc.block .a{color:var(--red)}
+.qc .s{font:500 13px var(--sans);color:#e7f7fb;margin-top:5px}
+
+/* --- glance (phone) --- */
+#glance{max-width:520px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 18px) 0 calc(env(safe-area-inset-bottom) + 96px);background:#04080d;min-height:100vh}
+#glance .mt{padding:6px 22px 0;display:flex;justify-content:space-between;align-items:flex-end}
+#glance h3{font:600 28px var(--sans);margin:6px 0 0;color:#fff}
+#glance .ring{display:block;margin:4px auto 0}
+.gsec{font:600 10px var(--mono);letter-spacing:.2em;color:var(--dim);margin:22px 22px 6px;display:flex;justify-content:space-between}
+#glance .need{margin:10px 16px;border-radius:14px;border-left-width:1px}
+#glance .need .n2{font-size:15px}
+#glance .btn{padding:10px 14px;border-radius:9px;font-size:11px}
+#glance .msg{padding:12px 22px}
+.tabbar{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-around;padding:10px 0 calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid rgba(255,255,255,.06);background:rgba(4,8,13,.94);backdrop-filter:blur(10px);font:500 10px var(--sans);z-index:30}
+.tabbar a{color:#61717c;text-decoration:none;text-align:center;min-width:64px}
+.tabbar a.on{color:var(--cyan)}
+.tabbar i{display:block;width:22px;height:22px;margin:0 auto 4px;border:1.6px solid currentColor;border-radius:7px}
+body.phone .top{display:none}
+@media (max-width:1180px){ #deck .right{display:none} #orbWrap{right:22px} #deck .bottom{right:42px} }
+</style>
+</head>
+<body>
+<div class="top" id="top">
+  <div class="logo">HALL<i>W</i>AY</div>
+  <div class="chips">
+    <div class="chip" id="cLive"></div>
+    <div class="chip am" id="cWait"></div>
+    <div class="chip rd" id="cBlock"></div>
+    <div class="chip" id="cMsgs"></div>
+  </div>
+  <div class="tabs"><a href="#deck">DECK</a><a href="#wall">WALL</a><a href="#focus">FOCUS</a><a href="#glance">PHONE</a></div>
+  <div class="clock" id="clock"></div>
+</div>
+
+<!-- ============ DECK ============ -->
+<section class="view" id="deck">
+  <div class="panel left">
+    <div class="ph"><span class="t glow">▲ NEEDS YOU</span><span class="c" id="needCount"></span></div>
+    <div class="scroll"><div id="needList"></div>
+      <div class="sec"><span>FINISHED · LAST 24H</span><span id="finCount" style="color:var(--green)"></span></div>
+      <div id="finList"></div></div>
+  </div>
+  <div id="orbWrap"><svg id="orb" viewBox="0 0 728 700" preserveAspectRatio="xMidYMid meet"></svg></div>
+  <div class="panel right">
+    <div class="ph"><span class="t glow">◉ LIVE COMMS</span><span class="c"><span class="dot" style="background:var(--red);animation:blink 1s infinite;margin-right:5px"></span>LIVE</span></div>
+    <div class="scroll" id="feed"></div>
+  </div>
+  <div class="bottom">
+    <div class="hud" style="display:flex;justify-content:space-between;margin-bottom:8px"><span>ACTIVITY · 24H</span><span id="peak" style="color:var(--cyan)"></span></div>
+    <svg id="spark" width="100%" height="66" viewBox="0 0 708 66" preserveAspectRatio="none"></svg>
+  </div>
+</section>
+
+<!-- ============ WALL ============ -->
+<section class="view" id="wall">
+  <h1>Every session, by project and by what it needs</h1>
+  <div class="sub" id="wallSub"></div>
+  <div class="wallg" id="wallg"></div>
+  <svg class="flows" id="flows"></svg>
+</section>
+
+<!-- ============ FOCUS ============ -->
+<section class="view" id="focus">
+  <div class="greet"><div class="k">HALLWAY · BRIEFING</div><h2 id="fGreet"></h2><p id="fSub"></p></div>
+  <svg class="wave" id="wave" viewBox="0 0 1440 80" preserveAspectRatio="none"></svg>
+  <div id="fCard"></div>
+  <div class="queue" id="fQueue"></div>
+</section>
+
+<!-- ============ GLANCE ============ -->
+<section class="view" id="glance">
+  <div class="mt"><div><div class="hud" style="color:var(--cyan)">HALLWAY</div><h3 id="gTitle"></h3></div><div class="hud" id="gClock"></div></div>
+  <svg class="ring" id="gRing" width="330" height="210" viewBox="0 0 330 210"></svg>
+  <div id="gNow"><div class="gsec"><span>NEEDS YOU</span><span id="gNeedN"></span></div><div id="gNeed"></div></div>
+  <div id="gComms"><div class="gsec"><span>LIVE COMMS</span><span></span></div><div id="gFeed"></div></div>
+  <div id="gDone"><div class="gsec"><span>FINISHED · 24H</span><span></span></div><div id="gFin"></div></div>
+  <nav class="tabbar"><a href="#glance" data-to="gNow" class="on"><i></i>Now</a><a href="#glance" data-to="gComms"><i style="border-radius:50%"></i>Comms</a><a href="#glance" data-to="gDone"><i style="border-radius:3px"></i>Finished</a><a href="#deck"><i></i>Deck</a></nav>
+</section>
+<div id="nodeTip"></div>
+<div class="scan"></div>
+
+<script>
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const COL = {work:"#5ef2ff", wait:"#ffb547", block:"#ff5470", done:"#62ffa8", idle:"#4b6472"};
+const LABEL = {work:"WORKING", wait:"NEEDS YOU", block:"BLOCKED", done:"SHIPPED", idle:"IDLE"};
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const svg = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const short = (s, n) => (s = String(s || "")).length > n ? s.slice(0, n - 1) + "…" : s;
+function ago(ts) { const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return Math.floor(s) + "s"; if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) { const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h + "h " + String(m).padStart(2, "0") + "m"; }
+  return Math.floor(s / 86400) + "d"; }
+const clockT = ts => new Date(ts * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", hour12:false});
+/* "Did X. Asks: Y?" -> the question is what matters on a card */
+const question = s => { const i = (s || "").indexOf(" Asks: "); return i >= 0 ? s.slice(i + 7) : (s || ""); };
+const context = s => { const i = (s || "").indexOf(" Asks: "); return i >= 0 ? s.slice(0, i) : ""; };
+
+let S = null, lastOk = 0, seenMsgs = new Set(), firstLoad = true;
+const sent = {};   // handle -> message id of a reply sent from here
+
+/* ------------------------------------------------------------ routing */
+function route() {
+  let v = (location.hash || "").slice(1);
+  if (!["deck", "wall", "focus", "glance"].includes(v)) v = innerWidth < 760 ? "glance" : "deck";
+  document.querySelectorAll(".view").forEach(e => e.classList.toggle("on", e.id === v));
+  document.querySelectorAll(".tabs a").forEach(a => a.classList.toggle("on", a.getAttribute("href") === "#" + v));
+  document.body.classList.toggle("phone", v === "glance");
+  window.VIEW = v; if (S) render();
+}
+addEventListener("hashchange", route);
+document.querySelectorAll(".tabbar a[data-to]").forEach(a => a.onclick = e => { e.preventDefault();
+  document.querySelectorAll(".tabbar a").forEach(x => x.classList.toggle("on", x === a));
+  document.getElementById(a.dataset.to).scrollIntoView({behavior:"smooth"}); });
+
+/* -------------------------------------------------------------- data */
+async function load() {
+  try { const r = await fetch("/api/deck", {cache:"no-store"}); if (!r.ok) throw 0;
+    S = await r.json(); lastOk = Date.now(); render(); }
+  catch (e) { /* keep the last picture; the clock turns red */ }
+}
+async function sendReply(handle, text) {
+  const r = await fetch("/api/reply", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({handle, text})});
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || "failed");
+  sent[handle] = j.id; load(); return j.id;
+}
+const name = h => h === S.human ? "You" : (S.names[h] || h);
+const sessionsBy = st => S.sessions.filter(s => s.state === st);
+function attention() { return [...sessionsBy("wait"), ...sessionsBy("block")].sort((a, b) =>
+  (a.state === "wait" ? 0 : 1) - (b.state === "wait" ? 0 : 1) || a.since - b.since); }
+function replyStatus(handle) {
+  const mid = sent[handle]; if (!mid) return "";
+  const m = S.messages.find(x => x.id === mid);
+  return m && m.delivered ? "✓ DELIVERED TO THE SESSION" : "✓ SENT · THE RELAY DELIVERS IT IN A FEW SECONDS";
+}
+
+/* ------------------------------------------------------- needs-you card */
+function needCard(s, opts = {}) {
+  const d = document.createElement("div"); d.className = "need " + (s.state === "block" ? "block" : "");
+  const head = s.state === "block" ? "BLOCKED · ON SOMEONE ELSE" : "WAITING ON YOU";
+  const q = s.state === "wait" ? question(s.said) : s.said;
+  d.innerHTML = `<div class="n1"><span>${head}${opts.group ? " · " + esc(s.group.toUpperCase()) : ""}</span><span data-since="${s.since}">${ago(s.since)}</span></div>
+    <div class="n2">${esc(s.title)}</div><div class="n3">${esc(short(q, 260))}</div>
+    <div class="act">${s.state === "wait" ? `<button class="btn p" data-a="yes">YES, GO AHEAD</button>` : ""}<button class="btn" data-a="reply">REPLY</button>${!opts.phone && s.host ? `<a class="btn" href="claude://claude.ai/epitaxy/${esc(s.host)}">OPEN</a>` : ""}</div>
+    <div class="reply"><textarea placeholder="Your answer to ${esc(s.title)}…"></textarea><div class="act"><button class="btn p" data-a="send">SEND</button><button class="btn" data-a="cancel">CANCEL</button></div></div>
+    <div class="sent">${replyStatus(s.handle)}</div>`;
+  const box = d.querySelector(".reply"), ta = d.querySelector("textarea"), st = d.querySelector(".sent");
+  const go = async text => { st.textContent = "SENDING…"; try { await sendReply(s.handle, text); st.textContent = replyStatus(s.handle); box.classList.remove("on"); }
+    catch (e) { st.style.color = "var(--red)"; st.textContent = "NOT SENT: " + e.message; } };
+  d.querySelectorAll("[data-a]").forEach(b => b.onclick = () => { const a = b.dataset.a;
+    if (a === "yes") go("Yes, go ahead.");
+    if (a === "reply") { box.classList.add("on"); ta.focus(); keepOpen.add(s.handle); }
+    if (a === "cancel") { box.classList.remove("on"); keepOpen.delete(s.handle); }
+    if (a === "send" && ta.value.trim()) { keepOpen.delete(s.handle); go(ta.value.trim()); } });
+  if (keepOpen.has(s.handle)) { box.classList.add("on"); ta.value = drafts[s.handle] || ""; }
+  ta.oninput = () => drafts[s.handle] = ta.value;
+  return d;
+}
+const keepOpen = new Set(), drafts = {};
+const editing = () => document.activeElement && document.activeElement.tagName === "TEXTAREA";
+
+/* =============================================================== render */
+function render() {
+  const att = attention(), live = S.sessions.filter(s => s.live).length;
+  const nw = sessionsBy("wait").length, nb = sessionsBy("block").length;
+  $("#cLive").innerHTML = `<span class="dot" style="background:var(--green);box-shadow:0 0 8px var(--green)"></span>${live} SESSIONS ONLINE`;
+  $("#cWait").innerHTML = `<span class="dot" style="background:var(--amber);${nw ? "animation:blink 1.2s infinite" : ""}"></span>${nw} WAITING ON YOU`;
+  $("#cWait").classList.toggle("zero", !nw);
+  $("#cBlock").textContent = nb + " BLOCKED"; $("#cBlock").classList.toggle("zero", !nb);
+  $("#cMsgs").textContent = S.messages_today + " MESSAGES TODAY";
+  if (VIEW === "deck") renderDeck(att);
+  if (VIEW === "wall") renderWall();
+  if (VIEW === "focus") renderFocus(att);
+  if (VIEW === "glance") renderGlance(att);
+  feedMessages();
+  firstLoad = false;
+}
+
+/* ------------------------------------------------------------------ deck */
+function finished() {
+  const out = [];
+  for (const s of S.sessions) {
+    if (s.state === "done") out.push({k:"MERGED", s, at:s.active, t:s.pr ? "PR #" + s.pr : ""});
+    else for (const u of s.updates) if (u.kind === "done" && Date.now() / 1000 - u.at < 86400) out.push({k:"DONE", s, at:u.at, t:u.text});
+  }
+  const seen = new Set();
+  return out.sort((a, b) => b.at - a.at).filter(x => !seen.has(x.s.handle) && seen.add(x.s.handle)).slice(0, 8);
+}
+function renderNeedList(el, att, opts) {
+  if (editing() && el.contains(document.activeElement)) return;
+  el.innerHTML = "";
+  if (!att.length) { el.innerHTML = `<div class="empty"><b>Nothing needs you.</b>${S.sessions.filter(s => s.state === "work").length} sessions are working. When one finishes by asking you something, it shows up here.</div>`; return; }
+  for (const s of att) el.appendChild(needCard(s, opts));
+}
+function renderFinished(el) {
+  const f = finished(); el.innerHTML = f.length ? "" : `<div class="empty" style="padding:8px 16px">Nothing finished yet today.</div>`;
+  for (const x of f) { const d = document.createElement("div"); d.className = "ship";
+    d.innerHTML = `<span class="k">${x.k}</span><div><b>${esc(x.s.title)}</b>${x.t ? " · " + esc(short(x.t, 110)) : ""}</div>`; el.appendChild(d); }
+  return f.length;
+}
+function renderDeck(att) {
+  $("#needCount").textContent = att.length + " OPEN";
+  renderNeedList($("#needList"), att, {});
+  $("#finCount").textContent = renderFinished($("#finList"));
+  buildOrbit();
+  renderSpark();
+}
+
+/* the orbit: you at the centre, sessions grouped by project around you */
+let orbSig = "", pos = {}, linkCache = {}, packetLayer, linkLayer, CX = 364, CY = 350;
+function orbitNodes() {
+  const order = {wait:0, block:1, work:2, idle:3, done:4};
+  return S.sessions.filter(s => s.live || s.state !== "idle" || Date.now() / 1000 - s.active < 43200)
+    .sort((a, b) => order[a.state] - order[b.state] || b.active - a.active).slice(0, 26);
+}
+function buildOrbit() {
+  const nodes = orbitNodes();
+  const sig = nodes.map(n => n.handle + n.state + n.group + n.title).join("|");
+  if (sig === orbSig) return; orbSig = sig;
+  const orb = $("#orb"); orb.innerHTML = ""; pos = {}; linkCache = {};
+  const defs = svg("defs", {}, orb);
+  defs.innerHTML = `<radialGradient id="core" cx="50%" cy="45%"><stop offset="0" stop-color="#e9fdff"/><stop offset=".35" stop-color="#5ef2ff"/><stop offset="1" stop-color="#0a3a48"/></radialGradient>
+    <radialGradient id="haze"><stop offset="0" stop-color="rgba(94,242,255,.20)"/><stop offset="1" stop-color="rgba(94,242,255,0)"/></radialGradient>
+    <linearGradient id="sweepg" x1="1" y1="0" x2="0" y2="0"><stop offset="0" stop-color="rgba(94,242,255,0)"/><stop offset="1" stop-color="rgba(94,242,255,.16)"/></linearGradient>
+    <filter id="gl" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="gl2" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="7"/></filter>`;
+  svg("circle", {cx:CX, cy:CY, r:330, fill:"url(#haze)"}, orb);
+  [120, 205, 285].forEach((r, i) => svg("circle", {cx:CX, cy:CY, r, fill:"none", stroke:`rgba(94,242,255,${.10 + i * .03})`}, orb));
+  svg("circle", {cx:CX, cy:CY, r:330, fill:"none", stroke:"rgba(94,242,255,.22)", "stroke-dasharray":"2 6"}, orb);
+  const tick = svg("g", {style:`transform-origin:${CX}px ${CY}px;animation:spin 120s linear infinite`}, orb);
+  for (let i = 0; i < 120; i++) { const a = i * 3 * Math.PI / 180, r2 = i % 10 ? 318 : 326;
+    svg("line", {x1:CX + 312 * Math.cos(a), y1:CY + 312 * Math.sin(a), x2:CX + r2 * Math.cos(a), y2:CY + r2 * Math.sin(a), stroke:`rgba(94,242,255,${i % 10 ? .25 : .6})`}, tick); }
+  const sweep = svg("g", {style:`transform-origin:${CX}px ${CY}px;animation:spin 9s linear infinite`}, orb);
+  svg("path", {d:`M${CX},${CY} L${CX + 300},${CY} A300,300 0 0,0 ${CX + 300 * Math.cos(-.5)},${CY + 300 * Math.sin(-.5)} Z`, fill:"url(#sweepg)", opacity:.55}, sweep);
+
+  // sectors sized by how many sessions each project has
+  const groups = {}; nodes.forEach(n => (groups[n.group] = groups[n.group] || []).push(n));
+  const gl = Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
+  const gap = 8, total = nodes.length || 1, avail = 360 - gap * gl.length;
+  let raw = gl.map(([, l]) => Math.max(34, avail * l.length / total)); const k = avail / raw.reduce((a, b) => a + b, 0); raw = raw.map(x => x * k);
+  let a0 = -90 - raw[0] / 2;
+  gl.forEach(([g, list], gi) => {
+    const span = raw[gi], mid = a0 + span / 2, R = 300;
+    const s0 = (a0 + 2) * Math.PI / 180, s1 = (a0 + span - 2) * Math.PI / 180;
+    svg("path", {d:`M${CX + R * Math.cos(s0)},${CY + R * Math.sin(s0)} A${R},${R} 0 ${span > 180 ? 1 : 0},1 ${CX + R * Math.cos(s1)},${CY + R * Math.sin(s1)}`, fill:"none", stroke:"rgba(94,242,255,.55)", "stroke-width":2}, orb);
+    const la = mid * Math.PI / 180;
+    const t = svg("text", {x:CX + 346 * Math.cos(la), y:CY + 346 * Math.sin(la) + 4, "text-anchor":"middle", fill:"#9fe9f5", "font-family":"JetBrains Mono, monospace", "font-size":11, "letter-spacing":3}, orb);
+    t.textContent = short(g.toUpperCase(), 14);
+    const radii = [258, 196, 140];
+    list.forEach((n, i) => { const f = list.length === 1 ? .5 : (i + .5) / list.length;
+      const ang = (a0 + span * f) * Math.PI / 180, r = list.length === 1 ? 236 : radii[i % 3];
+      pos[n.handle] = {x:CX + r * Math.cos(ang), y:CY + r * Math.sin(ang), a:ang}; });
+    a0 += span + gap;
+  });
+  linkLayer = svg("g", {}, orb);
+  // tethers: waiting on you
+  for (const n of nodes.filter(n => n.state === "wait")) { const P = pos[n.handle];
+    svg("path", {d:`M${P.x},${P.y} L${CX},${CY}`, stroke:"rgba(255,181,71,.55)", "stroke-width":1.2, "stroke-dasharray":"3 5", fill:"none", style:"animation:dash 1.4s linear infinite"}, linkLayer); }
+  for (const [a, b] of recentLinks()) linkPath(a, b);
+  // you
+  const core = svg("g", {}, orb);
+  svg("circle", {cx:CX, cy:CY, r:62, fill:"rgba(94,242,255,.06)", stroke:"rgba(94,242,255,.35)", "stroke-dasharray":"1 4"}, core);
+  const rr = svg("g", {style:`transform-origin:${CX}px ${CY}px;animation:spinr 18s linear infinite`}, core);
+  svg("circle", {cx:CX, cy:CY, r:52, fill:"none", stroke:"#5ef2ff", "stroke-width":2, "stroke-dasharray":"40 14 6 14", opacity:.8}, rr);
+  svg("circle", {cx:CX, cy:CY, r:34, fill:"url(#core)", filter:"url(#gl)"}, core);
+  const pulse = svg("circle", {cx:CX, cy:CY, r:34, fill:"none", stroke:"#5ef2ff", "stroke-width":1.5}, core);
+  pulse.innerHTML = `<animate attributeName="r" values="34;70" dur="2.6s" repeatCount="indefinite"/><animate attributeName="opacity" values=".7;0" dur="2.6s" repeatCount="indefinite"/>`;
+  const ct = svg("text", {x:CX, y:CY + 5, "text-anchor":"middle", fill:"#03202a", "font-family":"Space Grotesk, sans-serif", "font-weight":700, "font-size":14, "letter-spacing":2}, core); ct.textContent = "YOU";
+  // sessions: place labels greedily, most important first, so none overlap
+  const boxes = [{x0:CX - 72, x1:CX + 72, y0:CY - 72, y1:CY + 72}];
+  orb.querySelectorAll("text").forEach(t => { const x = +t.getAttribute("x"), y = +t.getAttribute("y"), w = t.textContent.length * 9.5;
+    boxes.push({x0:x - w / 2, x1:x + w / 2, y0:y - 12, y1:y + 4}); });
+  const hit = b => b.x0 < 2 || b.x1 > 726 || boxes.some(o => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+  const label = {};
+  for (const n of nodes) { const P = pos[n.handle], txt = short(n.title, 22), sub = LABEL[n.state] + (n.live ? "" : " · CLOSED");
+    const w = Math.max(txt.length * 6.7, sub.length * 6.6), pref = Math.cos(P.a) >= 0;
+    for (const [right, dy] of [[pref, 0], [!pref, 0], [pref, -15], [pref, 15], [!pref, -15], [!pref, 15]]) {
+      const lx = P.x + (right ? 14 : -14), b = {x0:right ? lx : lx - w, x1:right ? lx + w : lx, y0:P.y + dy - 14, y1:P.y + dy + 13};
+      if (!hit(b)) { boxes.push(b, {x0:P.x - 8, x1:P.x + 8, y0:P.y - 8, y1:P.y + 8}); label[n.handle] = {right, dy, lx, txt, sub}; break; } } }
+  for (const n of nodes) { const P = pos[n.handle], col = COL[n.state];
+    const g = svg("g", {style:"cursor:pointer"}, orb);
+    if (n.state === "wait" || n.state === "block") { const h = svg("circle", {cx:P.x, cy:P.y, r:10, fill:"none", stroke:col, "stroke-width":1.5}, g);
+      const d = n.state === "wait" ? 1.5 : 2.4; h.innerHTML = `<animate attributeName="r" values="9;24" dur="${d}s" repeatCount="indefinite"/><animate attributeName="opacity" values=".9;0" dur="${d}s" repeatCount="indefinite"/>`; }
+    svg("circle", {cx:P.x, cy:P.y, r:13, fill:col, opacity:n.live ? .18 : .06, filter:"url(#gl2)"}, g);
+    svg("circle", {cx:P.x, cy:P.y, r:16, fill:"transparent"}, g);
+    const dot = svg("circle", {cx:P.x, cy:P.y, r:n.state === "idle" ? 4 : 6, fill:n.state === "done" ? "none" : col, stroke:col, "stroke-width":n.state === "done" ? 1.6 : 0, filter:"url(#gl)", opacity:n.live ? 1 : .5}, g);
+    if (n.state === "work") dot.innerHTML = `<animate attributeName="opacity" values="1;.5;1" dur="${2 + Math.random() * 2}s" repeatCount="indefinite"/>`;
+    const L = label[n.handle];
+    if (L) { const an = L.right ? "start" : "end";
+      const lt = svg("text", {x:L.lx, y:P.y + L.dy - 3, "text-anchor":an, fill:n.state === "idle" ? "#6d8896" : "#e4fbff", "font-family":"Space Grotesk, sans-serif", "font-size":12, "font-weight":500}, g); lt.textContent = L.txt;
+      const ls = svg("text", {x:L.lx, y:P.y + L.dy + 10, "text-anchor":an, fill:col, "font-family":"JetBrains Mono, monospace", "font-size":8.5, "letter-spacing":1.5}, g); ls.textContent = L.sub; }
+    g.onmouseenter = e => showTip(n, e); g.onmousemove = moveTip; g.onmouseleave = () => $("#nodeTip").style.display = "none";
+    g.onclick = () => { if (n.state === "wait" || n.state === "block") { focusOn = n.handle; location.hash = "#focus"; } };
+  }
+  packetLayer = svg("g", {}, orb);
+}
+function showTip(n, e) { const t = $("#nodeTip");
+  t.innerHTML = `<div class="k" style="color:${COL[n.state]}">${LABEL[n.state]} · ${esc(n.group.toUpperCase())}</div><b>${esc(n.title)}</b>${esc(short(n.said || n.prompt, 220))}${n.branch ? `<div class="hud" style="margin-top:6px;font-size:9.5px">${esc(n.branch)}${n.pr ? " · PR #" + n.pr : ""}</div>` : ""}`;
+  t.style.display = "block"; moveTip(e); }
+function moveTip(e) { const t = $("#nodeTip"); t.style.left = Math.min(innerWidth - 320, e.clientX + 16) + "px"; t.style.top = (e.clientY + 14) + "px"; }
+function recentLinks() { const out = new Map(), t = Date.now() / 1000;
+  for (const m of S.messages) { if (t - m.ts > 172800 || !m.recipient) continue;
+    if (pos[m.sender] && pos[m.recipient]) out.set([m.sender, m.recipient].sort().join(">"), [m.sender, m.recipient]); }
+  return [...out.values()]; }
+function linkPath(a, b) {
+  const key = [a, b].sort().join(">"); if (linkCache[key]) return {path:linkCache[key].path, dir:linkCache[key].a === a ? 1 : -1};
+  const A = a === "@core" ? {x:CX, y:CY} : pos[a], B = b === "@core" ? {x:CX, y:CY} : pos[b]; if (!A || !B) return null;
+  const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, qx = mx + (CX - mx) * .45, qy = my + (CY - my) * .45;
+  const path = svg("path", {d:`M${A.x},${A.y} Q${qx},${qy} ${B.x},${B.y}`, fill:"none", stroke:"rgba(94,242,255,.16)"}, linkLayer);
+  linkCache[key] = {path, a}; return {path, dir:1};
+}
+const packets = [];
+function sendPacket(from, to, bright) {
+  if (VIEW !== "deck" || !packetLayer) return;
+  const L = linkPath(from, to); if (!L) return;
+  const col = bright ? "#ffffff" : "#5ef2ff", heads = [];
+  for (let i = 0; i < (bright ? 6 : 4); i++) heads.push(svg("circle", {r:(bright ? 3.4 : 2.4) - i * .45, fill:col, opacity:1 - i * .17, filter:i ? "" : "url(#gl)"}, packetLayer));
+  if (bright) { L.path.setAttribute("stroke", "rgba(94,242,255,.75)"); setTimeout(() => L.path.setAttribute("stroke", "rgba(94,242,255,.16)"), 1500); }
+  packets.push({L, heads, t0:performance.now(), dur:bright ? 1300 : 2000 + Math.random() * 900});
+}
+function tickPackets(now) {
+  for (let i = packets.length - 1; i >= 0; i--) { const p = packets[i], k = (now - p.t0) / p.dur;
+    if (k >= 1 || !p.L.path.isConnected) { p.heads.forEach(h => h.remove()); packets.splice(i, 1); continue; }
+    const len = p.L.path.getTotalLength();
+    p.heads.forEach((h, j) => { let kk = Math.max(0, k - j * .022); kk = 1 - Math.pow(1 - kk, 2);
+      const pt = p.L.path.getPointAtLength((p.L.dir > 0 ? kk : 1 - kk) * len); h.setAttribute("cx", pt.x); h.setAttribute("cy", pt.y); }); }
+}
+setInterval(() => { if (!S || VIEW !== "deck") return; const l = recentLinks();
+  if (l.length) { const [a, b] = l[Math.floor(Math.random() * l.length)]; Math.random() < .5 ? sendPacket(a, b) : sendPacket(b, a); }
+  const w = S.sessions.filter(s => s.state === "wait" && pos[s.handle]); if (w.length && Math.random() < .4) sendPacket(w[Math.floor(Math.random() * w.length)].handle, "@core"); }, 900);
+function renderSpark() {
+  const s = $("#spark"); s.innerHTML = ""; const bins = S.activity, w = 708 / bins.length, mx = Math.max(4, ...bins);
+  bins.forEach((v, i) => { const h = Math.max(2, v / mx * 58); svg("rect", {x:i * w + 1, y:62 - h, width:w - 2.2, height:h, rx:1, fill:`rgba(94,242,255,${.18 + .7 * v / mx})`}, s); });
+  svg("line", {x1:707, x2:707, y1:0, y2:66, stroke:"#ffb547", "stroke-width":2}, s);
+  const pk = bins.indexOf(Math.max(...bins)), pt = new Date(Date.now() - (72 - pk) * 1200000);
+  $("#peak").textContent = Math.max(...bins) ? "PEAK " + pt.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", hour12:false}) + " · " + Math.max(...bins) + " EVENTS" : "QUIET";
+}
+
+/* ------------------------------------------------------------- comms */
+function msgEl(m, typing) {
+  const d = document.createElement("div"); d.className = "msg" + (typing ? " new" : "");
+  const to = m.recipient ? name(m.recipient) : "#" + (m.channel || "all");
+  d.innerHTML = `<div class="r"><span class="who"><span class="${m.sender === S.human ? "me" : ""}">${esc(short(name(m.sender), 26).toUpperCase())}</span><em>→</em>${esc(short(to, 26).toUpperCase())}</span><span>${clockT(m.ts)}</span></div><div class="s">${esc(m.subject || "")}</div><div class="b"></div>`;
+  const b = d.querySelector(".b");
+  if (typing) { b.classList.add("cur"); let i = 0; const body = m.body || ""; const ty = setInterval(() => { b.textContent = body.slice(0, i += 3); if (i >= body.length) { clearInterval(ty); b.classList.remove("cur"); } }, 16); }
+  else b.textContent = m.body || "";
+  return d;
+}
+function feedMessages() {
+  const fresh = [];
+  for (const m of [...S.messages].reverse()) if (!seenMsgs.has(m.id)) { seenMsgs.add(m.id); if (!firstLoad) fresh.push(m); }
+  for (const [el, n] of [[$("#feed"), 40], [$("#gFeed"), 12]]) {
+    if (firstLoad || !el.children.length) { el.innerHTML = ""; S.messages.slice(0, n).forEach(m => el.appendChild(msgEl(m, false))); continue; }
+    for (const m of fresh) { el.prepend(msgEl(m, true)); while (el.children.length > n) el.lastChild.remove(); }
+  }
+  for (const m of fresh) {
+    if (m.recipient) sendPacket(m.sender === S.human ? "@core" : m.sender, m.recipient === S.human ? "@core" : m.recipient, true);
+    else Object.keys(pos).slice(0, 10).forEach(h => h !== m.sender && sendPacket(m.sender, h, true));
+  }
+}
+
+/* ------------------------------------------------------------------ wall */
+const COLS = [["work","WORKING","var(--cyan)"],["wait","WAITING ON YOU","var(--amber)"],["block","BLOCKED","var(--red)"],["idle","IDLE / FINISHED A TURN","var(--dim)"],["done","SHIPPED","var(--green)"]];
+let wallSig = "";
+function renderWall() {
+  const att = attention();
+  $("#wallSub").innerHTML = att.length ? `If you only do one thing: <b>${esc(att[0].title)}</b>${att[0].state === "wait" ? " is waiting on your answer." : " is blocked."}` : "Nothing is waiting on you. Everything below is running on its own.";
+  const sig = S.sessions.map(s => s.handle + s.state + s.said).join("|"); if (sig === wallSig) return; wallSig = sig;
+  const g = $("#wallg"); g.innerHTML = "<div></div>" + COLS.map(([, l, c]) => `<div class="colh" style="color:${c}"><span class="dot" style="background:${c}"></span>${l}</div>`).join("");
+  const groups = {}; S.sessions.forEach(s => (groups[s.group] = groups[s.group] || []).push(s));
+  for (const [gname, list] of Object.entries(groups).sort((a, b) => b[1].length - a[1].length)) {
+    g.insertAdjacentHTML("beforeend", `<div class="rowh">${esc(gname.toUpperCase())}<small>${list.length} SESSION${list.length > 1 ? "S" : ""}</small></div>`);
+    for (const [st] of COLS) { const cell = document.createElement("div"); cell.className = "cell";
+      for (const s of list.filter(x => x.state === st)) { const c = document.createElement("div"); c.className = "card " + st + (s.live ? "" : " off"); c.id = "w-" + s.handle;
+        const txt = st === "wait" ? question(s.said) : (s.said || s.prompt);
+        c.innerHTML = `<div class="ct">${esc(s.title)}</div><div class="cs">${esc(short(txt, 180))}</div><div class="cm">${s.branch ? `<span class="tag">${esc(short(s.branch, 30))}</span>` : ""}${s.pr ? `<span class="tag">PR #${s.pr} ${esc((s.pr_state || "").toLowerCase())}</span>` : ""}<span class="tag">${s.live ? ago(st === "work" || st === "wait" || st === "block" ? s.since : s.active) : "closed"}</span></div>${st === "work" ? '<div class="bar"><i></i></div>' : ""}`;
+        if (st === "wait" || st === "block") { c.style.cursor = "pointer"; c.onclick = () => { focusOn = s.handle; location.hash = "#focus"; }; }
+        cell.appendChild(c); }
+      g.appendChild(cell); }
+  }
+  requestAnimationFrame(drawFlows);
+}
+function drawFlows() {
+  const f = $("#flows"), root = $("#wall"); f.innerHTML = ""; f.setAttribute("width", root.scrollWidth); f.setAttribute("height", root.scrollHeight);
+  const rb = root.getBoundingClientRect(), t = Date.now() / 1000, done = new Set();
+  for (const m of S.messages) { if (!m.recipient || t - m.ts > 172800) continue;
+    const key = [m.sender, m.recipient].sort().join(">"); if (done.has(key)) continue;
+    const A = document.getElementById("w-" + m.sender), B = document.getElementById("w-" + m.recipient); if (!A || !B) continue; done.add(key);
+    const a = A.getBoundingClientRect(), b = B.getBoundingClientRect();
+    let x1 = a.right - rb.left, y1 = a.top + a.height / 2 - rb.top, x2 = b.left - rb.left, y2 = b.top + b.height / 2 - rb.top;
+    if (b.left < a.left) { x1 = a.left - rb.left; x2 = b.right - rb.left; }
+    let d; if (Math.abs(a.left - b.left) < 20) { x1 = a.right - rb.left; x2 = b.right - rb.left; d = `M${x1},${y1} C${x1 + 50},${y1} ${x2 + 50},${y2} ${x2},${y2}`; }
+    else { const dx = (x2 - x1) / 2; d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`; }
+    svg("path", {d, fill:"none", stroke:"#5ef2ff", "stroke-opacity":.45, "stroke-width":1.4, "stroke-dasharray":"4 6", style:"animation:dash 1.2s linear infinite"}, f);
+    const c = svg("circle", {r:3, fill:"#5ef2ff"}, f); c.innerHTML = `<animateMotion dur="${2 + Math.random() * 1.5}s" repeatCount="indefinite" path="${d}"/>`; }
+}
+addEventListener("resize", () => { if (VIEW === "wall") drawFlows(); });
+
+/* ----------------------------------------------------------------- focus */
+let focusOn = null, focusSig = "";
+function renderFocus(att) {
+  const h = new Date().getHours(), part = h < 5 ? "Working late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  const nw = sessionsBy("wait").length, nb = sessionsBy("block").length, nwork = sessionsBy("work").length;
+  const words = ["No sessions", "One session", "Two sessions", "Three sessions", "Four sessions", "Five sessions"];
+  $("#fGreet").innerHTML = nw ? `${part}. <b>${words[nw] || nw + " sessions"}</b> need${nw === 1 ? "s" : ""} you.` : `${part}. Nothing needs you right now.`;
+  $("#fSub").textContent = `${nwork} working${nb ? `, ${nb} blocked on someone else` : ""}. ${S.sessions.filter(s => s.live).length} online in total.`;
+  if (editing()) return;
+  const cur = att.find(s => s.handle === focusOn) || att[0];
+  const sig = (cur ? cur.handle + cur.said + replyStatus(cur.handle) : "none") + att.map(s => s.handle).join();
+  if (sig === focusSig) return; focusSig = sig;
+  const card = $("#fCard"), q = $("#fQueue");
+  if (!cur) { card.innerHTML = `<div class="focus" style="border-color:var(--line2);text-align:center"><div class="q" style="margin:4px 0 8px">All clear.</div><div style="color:#93afba">When a session finishes by asking you something, it appears here as one decision at a time.</div></div>`; q.innerHTML = ""; return; }
+  focusOn = cur.handle;
+  const col = COL[cur.state], ctx = context(cur.said);
+  const bullets = [...(ctx ? [["now", ctx]] : []), ...cur.updates.slice(0, -1).reverse().slice(0, 3).map(u => [clockT(u.at), u.text]), ...(cur.prompt ? [["you asked", cur.prompt]] : [])];
+  card.innerHTML = `<div class="focus ${cur.state}">
+    <div class="who"><svg width="44" height="44" viewBox="0 0 44 44"><polygon points="22,2 40,12 40,32 22,42 4,32 4,12" fill="${col}22" stroke="${col}" stroke-width="1.5"/><circle cx="22" cy="22" r="5" fill="${col}"><animate attributeName="r" values="4;6;4" dur="1.6s" repeatCount="indefinite"/></circle></svg>
+      <div><div class="nm">${esc(cur.title)}</div><div class="mt">${esc(cur.group.toUpperCase())}${cur.branch ? " · " + esc(cur.branch.toUpperCase()) : ""}${cur.pr ? " · PR #" + cur.pr : ""} · ${cur.state === "wait" ? "WAITING" : "BLOCKED"} ${ago(cur.since).toUpperCase()}</div></div></div>
+    <div class="q">${esc(cur.state === "wait" ? question(cur.said) : cur.said)}</div>
+    <ul>${bullets.map(([k, v]) => `<li><em>${esc(k)}</em>${esc(short(v, 200))}</li>`).join("")}</ul>
+    <textarea id="fText" placeholder="Answer ${esc(cur.title)}…"></textarea>
+    <div class="acts">${cur.state === "wait" ? `<button class="fb p" data-q="Yes, go ahead.">Yes, go ahead</button><button class="fb" data-q="No, hold off for now.">No, hold off</button>` : ""}<button class="fb" data-send>Send answer</button>${cur.host ? `<a class="fb" href="claude://claude.ai/epitaxy/${esc(cur.host)}">Open session</a>` : ""}</div>
+    <div class="sent" id="fSent">${replyStatus(cur.handle)}</div></div>`;
+  const go = async text => { $("#fSent").textContent = "SENDING…"; try { await sendReply(cur.handle, text); focusSig = ""; } catch (e) { $("#fSent").textContent = "NOT SENT: " + e.message; } };
+  card.querySelectorAll("[data-q]").forEach(b => b.onclick = () => go(b.dataset.q));
+  card.querySelector("[data-send]").onclick = () => { const v = $("#fText").value.trim(); if (v) go(v); };
+  q.innerHTML = "";
+  for (const s of att) { const b = document.createElement("button"); b.className = "qc " + s.state + (s.handle === cur.handle ? " cur" : "");
+    b.innerHTML = `<div class="a">${s.handle === cur.handle ? "NOW · " : ""}${s.state === "wait" ? "WAITING " + ago(s.since).toUpperCase() : "BLOCKED · NOT ON YOU"}</div><div class="s">${esc(s.title)}: ${esc(short(s.state === "wait" ? question(s.said) : s.said, 90))}</div>`;
+    b.onclick = () => { focusOn = s.handle; focusSig = ""; renderFocus(attention()); }; q.appendChild(b); }
+}
+const wps = [0, 1, 2].map(i => svg("path", {fill:"none", stroke:["#5ef2ff", "#ffb547", "#9b8cff"][i], "stroke-width":i ? 1 : 1.6, opacity:i ? .45 : .9}, $("#wave")));
+function tickWave(now) { if (VIEW !== "focus") return; const t = now / 1000, amp = S && sessionsBy("wait").length ? 1 : .35;
+  wps.forEach((p, k) => { let d = ""; for (let x = 0; x <= 1440; x += 8) { const env = Math.exp(-Math.pow((x - 720) / 330, 2));
+    const y = 40 + amp * env * (Math.sin(x * .028 + t * (2.2 + k * .6) + k) * 15 + Math.sin(x * .061 - t * 3.1) * 7) * (.65 + .35 * Math.sin(t * 1.3 + k));
+    d += (x ? "L" : "M") + x + "," + y.toFixed(1); } p.setAttribute("d", d); }); }
+
+/* ----------------------------------------------------------------- glance */
+let ringSig = "";
+function renderGlance(att) {
+  const nw = sessionsBy("wait").length;
+  $("#gTitle").textContent = nw ? nw + " need" + (nw === 1 ? "s" : "") + " you" : "All clear";
+  $("#gNeedN").textContent = att.length;
+  renderNeedList($("#gNeed"), att, {phone:true, group:true});
+  renderFinished($("#gFin"));
+  const counts = {work:sessionsBy("work").length + sessionsBy("idle").filter(s => s.live).length, wait:nw, block:sessionsBy("block").length};
+  const sig = JSON.stringify(counts); if (sig === ringSig) return; ringSig = sig;
+  const s = $("#gRing"); s.innerHTML = ""; const cx = 165, cy = 108, total = Math.max(1, S.sessions.filter(x => x.live).length);
+  [[92, "#5ef2ff", counts.work], [76, "#ffb547", counts.wait], [60, "#ff5470", counts.block]].forEach(([r, col, n], i) => { const L = 2 * Math.PI * r;
+    svg("circle", {cx, cy, r, fill:"none", stroke:col, "stroke-opacity":.13, "stroke-width":11}, s);
+    const a = svg("circle", {cx, cy, r, fill:"none", stroke:col, "stroke-width":11, "stroke-linecap":"round", transform:`rotate(-90 ${cx} ${cy})`, style:`filter:drop-shadow(0 0 6px ${col});stroke-dasharray:0 ${L};transition:stroke-dasharray 1.4s cubic-bezier(.2,.8,.2,1) ${.2 + i * .2}s`}, s);
+    setTimeout(() => a.style.strokeDasharray = `${n ? Math.max(.04, n / total) * L : 0} ${L}`, 60); });
+  const t = svg("text", {x:cx, y:cy + 6, "text-anchor":"middle", fill:"#fff", "font-family":"Space Grotesk, sans-serif", "font-size":36, "font-weight":600}, s); t.textContent = S.sessions.filter(x => x.live).length;
+  const u = svg("text", {x:cx, y:cy + 26, "text-anchor":"middle", fill:"#7b97a6", "font-family":"JetBrains Mono, monospace", "font-size":9, "letter-spacing":2}, s); u.textContent = "ONLINE";
+  [["WORKING " + counts.work, "#5ef2ff", 8, 22, "start"], ["NEED YOU " + counts.wait, "#ffb547", 322, 22, "end"], ["BLOCKED " + counts.block, "#ff5470", 322, 40, "end"]].forEach(([l, c, x, y, an]) => {
+    const tt = svg("text", {x, y, "text-anchor":an, fill:c, "font-family":"JetBrains Mono, monospace", "font-size":10, "letter-spacing":1}, s); tt.textContent = l; });
+}
+
+/* ------------------------------------------------------------------ clock */
+setInterval(() => { const stale = Date.now() - lastOk > 15000;
+  $("#clock").textContent = stale ? "OFFLINE · LAST " + (lastOk ? new Date(lastOk).toLocaleTimeString([], {hour12:false}) : "—") : new Date().toLocaleTimeString([], {hour12:false});
+  $("#clock").classList.toggle("stale", stale);
+  $("#gClock").textContent = stale ? "OFFLINE" : new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  $("#gClock").classList.toggle("stale", stale);
+  document.querySelectorAll("[data-since]").forEach(e => e.textContent = ago(+e.dataset.since)); }, 1000);
+
+function loop(now) { tickPackets(now); tickWave(now); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+route(); load();
+let timer = setInterval(load, 4000);
+document.addEventListener("visibilitychange", () => { clearInterval(timer); if (!document.hidden) { load(); timer = setInterval(load, 4000); } });
+</script>
+</body>
+</html>

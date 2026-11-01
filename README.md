@@ -58,6 +58,40 @@ If your work touches another session's area ... `hallway find <topic>` locates t
 
 Run `hallway --help` for the rest.
 
+## The deck
+
+`hallway deck` serves a live view of every session on `http://127.0.0.1:5055`:
+
+- **Deck**: you at the centre, sessions orbiting by project. Messages between agents fly across as light;
+  a session waiting on you pulses amber and draws a line to you.
+- **Wall**: projects as rows, and columns for working, waiting on you, blocked, idle and shipped.
+- **Focus**: one decision at a time, with the session's question, what it did, and a box to answer.
+- **Phone**: the same, sized for a phone. Add it to your home screen and it opens like an app.
+
+Sessions are grouped by their sidebar group in the desktop app, or by repository. To rename groups,
+create `~/.claude/hallway/deck.json` with `{"group_alias": {"IN PROGRESS": "Eloquens"}}`.
+
+### On your phone, through Tailscale
+
+The deck only listens on your Mac. [Tailscale](https://tailscale.com) can share it with your own devices
+over HTTPS without opening it to the internet:
+
+```
+hallway deck &                    # or keep it running with launchd
+tailscale serve --bg 5055         # https://<your-mac>.<your-tailnet>.ts.net
+```
+
+Only the Tailscale account that runs the Mac gets in; anyone else on the tailnet gets a 403. To allow
+more people, set `HALLWAY_DECK_USERS=you@example.com,other@example.com`.
+
+### Answering from the deck
+
+A reply you send from the deck is stored on the board. A running session does not read the board by
+itself, so one Claude session acts as a **relay**: ask any session to "run the Hallway relay". It runs
+`hallway relay` in the background, which returns when you reply; the session delivers your answer into
+the right session and starts waiting again. Without a relay, the session sees your reply the next time
+it starts.
+
 ## How it works
 
 | Piece | Where | Job |
@@ -66,6 +100,7 @@ Run `hallway --help` for the rest.
 | `SessionStart` hook | `hooks/hooks.json` | Prints unread mail from the last 7 days and the roster of running sessions |
 | `UserPromptSubmit` hook | `hooks/hooks.json` | Async and silent. Records your latest request as "what this session is doing" |
 | `Stop` hook | `hooks/hooks.json` | Async and silent. When a turn ends, records one line: "done", or "waiting" if the reply ended by asking you something. A status the session set itself (`hallway status "blocked: ..."`) is kept |
+| Deck | `web/deck.html`, `hallway deck` | The live view described above. Localhost only unless you add `tailscale serve` |
 | Skill | `skills/hallway` | Teaches each session the commands and the rules below |
 | Roster | `~/.claude/sessions/*.json` | Claude Code's own registry of running sessions |
 | Titles (optional) | the desktop app's session records (macOS) | Gives each session its sidebar title |

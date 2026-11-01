@@ -1388,6 +1388,328 @@ def _install_shim():
         pass
 
 
+# ------------------------------------------------------------------ deck
+# `hallway deck` serves a live view of every session: who is working, who is waiting
+# on you, who is blocked, and the messages between them. It binds to localhost; to see
+# it on a phone, put it behind `tailscale serve` (see the README).
+
+DECK_CONF = os.path.join(ROOT, "deck.json")
+HUMAN = "you"
+
+
+def _deck_conf():
+    try:
+        with open(DECK_CONF) as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _sidebar_groups():
+    """Desktop-app session id (local_...) -> the sidebar group it is filed under."""
+    out = {}
+    for app in ("Claude", "Claude-3p"):
+        try:
+            with open(os.path.join(_APPSUP, app, "claude_desktop_config.json")) as fh:
+                prefs = json.load(fh).get("preferences", {}).get("epitaxyPrefs", {})
+        except Exception:
+            continue
+        for scope in (prefs.get("dframe-group-scopes") or {}).values():
+            if not isinstance(scope, dict):
+                continue
+            names = {g.get("id"): g.get("name") for g in scope.get("groups") or []}
+            for key, gid in (scope.get("assignments") or {}).items():
+                if key.startswith("code:") and names.get(gid):
+                    out[key[5:]] = names[gid]
+    return out
+
+
+def _pretty_project(name):
+    name = re.sub(r"^(ignitetech-|igt-)", "", name or "")
+    name = re.sub(r"-(ai|app|repo)$", "", name)
+    return name.replace("-", " ").title() if name else "Other"
+
+
+def _human_text(text, cap=300):
+    """Drop markup that tools wrap around prompts (system reminders, mentions)."""
+    text = re.sub(r"<([a-z][\w-]*)[^>]*>.*?</\1>", " ", text or "", flags=re.S)
+    text = re.sub(r"<[^>]{1,80}>", " ", text)
+    return _clean(text, cap)
+
+
+def deck_state(conn):
+    t = now()
+    titles = session_titles()
+    groups = _sidebar_groups()
+    conf = _deck_conf()
+    alias = conf.get("group_alias") or {}
+    live = live_handles(conn)
+    last = {}
+    for r in conn.execute("SELECT handle, at, kind, text FROM status_log WHERE at > ?"
+                          " ORDER BY at", (t - 7 * 86400,)):
+        last.setdefault(r["handle"], []).append(dict(r))
+    sessions = []
+    for r in conn.execute("SELECT * FROM agents WHERE kind='session'").fetchall():
+        h = r["handle"]
+        meta = titles.get(r["session_id"] or "") or {}
+        if meta.get("archived"):
+            continue
+        log = last.get(h, [])
+        latest = log[-1] if log else None
+        active = max(r["last_seen"] or 0, meta.get("active") or 0, latest["at"] if latest else 0)
+        is_live = h in live
+        if not (is_live or t - active < 86400):
+            continue
+        prompt_at = r["prompt_at"] or 0
+        said, since = "", active
+        if latest and latest["at"] >= prompt_at and latest["kind"] == "waiting":
+            state, said, since = "wait", latest["text"], latest["at"]
+        elif (r["status"] or "").lower().startswith("blocked") and (r["status_at"] or 0) >= prompt_at:
+            state, said, since = "block", r["status"], r["status_at"]
+        elif is_live and prompt_at and prompt_at > (latest["at"] if latest else 0) and t - prompt_at < 3 * 3600:
+            state, said, since = "work", "asked: " + _human_text(r["last_prompt"]), prompt_at
+        elif (meta.get("pr_state") or "").upper() == "MERGED":
+            state, said = "done", "PR #%s merged" % meta.get("pr")
+        elif is_live:
+            state, said = "idle", latest["text"] if latest else (r["status"] or "")
+        else:
+            state, said = "idle", latest["text"] if latest else ""
+        host = meta.get("host") or (live.get(h) or {}).get("host")
+        group = groups.get(host or "") or _pretty_project(r["project"] or project_of(meta.get("cwd") or r["cwd"] or ""))
+        group = alias.get(group, group)
+        sessions.append({
+            "handle": h, "host": host, "title": r["title"] or meta.get("title") or meta.get("branch") or "Untitled session",
+            "group": group, "branch": meta.get("branch") or r["branch"], "pr": meta.get("pr"),
+            "pr_state": meta.get("pr_state"), "live": is_live, "state": state, "said": said,
+            "since": since, "active": active, "prompt": _human_text(r["last_prompt"]),
+            "updates": [{"at": u["at"], "kind": u["kind"], "text": u["text"]} for u in log[-4:]],
+        })
+    # One desktop session can own several CLI sessions over its life (resumes, restarts):
+    # show it once, as its most recent self.
+    seen, merged = {}, []
+    for x in sorted(sessions, key=lambda x: (x["live"], x["active"]), reverse=True):
+        key = x["host"] or x["title"]
+        if key in seen or x["title"] in seen:
+            continue
+        seen[key] = seen[x["title"]] = True
+        merged.append(x)
+    sessions = merged
+    known = {s["handle"] for s in sessions}
+    names = {r["handle"]: (r["title"] or r["handle"]) for r in conn.execute("SELECT handle, title FROM agents")}
+    names[HUMAN] = "You"
+    msgs = []
+    for m in conn.execute("SELECT * FROM messages WHERE ts > ? ORDER BY ts DESC LIMIT 80", (t - 3 * 86400,)):
+        d = {k: m[k] for k in ("id", "ts", "sender", "recipient", "channel", "subject")}
+        d["body"] = _clean(m["body"] or "", 600)
+        d["delivered"] = bool(m["recipient"] and conn.execute(
+            "SELECT 1 FROM notified WHERE message_id=? AND handle=?", (m["id"], m["recipient"])).fetchone()
+            or conn.execute("SELECT 1 FROM reads WHERE message_id=?", (m["id"],)).fetchone())
+        msgs.append(d)
+    bins = [0] * 72
+    for (ts,) in conn.execute("SELECT ts FROM messages WHERE ts > ? UNION ALL SELECT at FROM status_log WHERE at > ?",
+                              (t - 86400, t - 86400)):
+        bins[min(71, int((ts - (t - 86400)) / 1200))] += 1
+    lt = time.localtime(t)
+    midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    today = conn.execute("SELECT COUNT(*) FROM messages WHERE ts >= ?", (midnight,)).fetchone()[0]
+    return {"generated_at": t, "sessions": sessions, "messages": msgs, "names": names,
+            "known": sorted(known), "activity": bins, "messages_today": today,
+            "hour": lt.tm_hour, "human": HUMAN}
+
+
+def _deck_reply(conn, handle, text):
+    if not conn.execute("SELECT 1 FROM agents WHERE handle=?", (handle,)).fetchone():
+        return None
+    conn.execute("INSERT OR IGNORE INTO agents (handle, kind, first_seen, last_seen) VALUES (?,?,?,?)",
+                 (HUMAN, "human", now(), now()))
+    mid = short_id()
+    conn.execute("INSERT INTO messages (id, ts, sender, recipient, channel, subject, body, thread,"
+                 " in_reply_to, priority, tags) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                 (mid, now(), HUMAN, handle, None, "Reply from your user", text, None, None,
+                  "high", "from-deck"))
+    conn.commit()
+    return mid
+
+
+def _tailscale_owner():
+    """The Tailscale login of whoever runs this machine (empty if Tailscale is off)."""
+    import subprocess
+    for exe in ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
+        try:
+            out = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=5).stdout
+            st = json.loads(out)
+            uid = str((st.get("Self") or {}).get("UserID"))
+            login = ((st.get("User") or {}).get(uid) or {}).get("LoginName")
+            if login:
+                return {login.lower()}
+        except Exception:
+            continue
+    return set()
+
+
+def cmd_deck(conn, args):
+    """Serve the live deck on localhost."""
+    import http.server
+    here = os.path.dirname(os.path.abspath(__file__))
+    page = os.path.join(here, "..", "web", "deck.html")
+    allowed = {u.strip().lower() for u in os.environ.get("HALLWAY_DECK_USERS", "").split(",") if u.strip()}
+    if not allowed:
+        allowed = _tailscale_owner()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, body, ctype="application/json"):
+            if isinstance(body, str):
+                body = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _allowed(self):
+            # Behind `tailscale serve`, Tailscale says who is asking. Only the people
+            # listed in HALLWAY_DECK_USERS get in; plain localhost requests carry no header.
+            who = (self.headers.get("Tailscale-User-Login") or "").lower()
+            if who and not allowed:
+                allowed.update(_tailscale_owner())
+            if who and who not in allowed:
+                self._send(403, "This deck belongs to someone else.", "text/plain")
+                return False
+            if not who and self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send(403, "Local or Tailscale access only.", "text/plain")
+                return False
+            # A web page on another site must not be able to talk to the deck through your
+            # browser (DNS rebinding), so the Host has to be one we expect.
+            host = (self.headers.get("Host") or "").split(":")[0].lower()
+            if host not in ("127.0.0.1", "localhost", "[::1]") and not host.endswith(".ts.net"):
+                self._send(403, "Unexpected host.", "text/plain")
+                return False
+            return True
+
+        def _same_origin(self):
+            # A reply becomes an instruction to an agent, so refuse cross-site posts: they
+            # must be JSON (which a plain form cannot send) and come from this page.
+            if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
+                return False
+            origin = self.headers.get("Origin")
+            if origin:
+                o = origin.split("://", 1)[-1].lower()
+                via_tailscale = bool(self.headers.get("Tailscale-User-Login"))
+                # `tailscale serve` may rewrite Host, so a page on your own *.ts.net name counts too.
+                if o != (self.headers.get("Host") or "").lower() and not (
+                        via_tailscale and o.split(":")[0].endswith(".ts.net")):
+                    return False
+            return True
+
+        def do_GET(self):
+            if not self._allowed():
+                return
+            path = self.path.split("?")[0]
+            if path in ("/", "/index.html"):
+                try:
+                    with open(page, "rb") as fh:
+                        self._send(200, fh.read(), "text/html; charset=utf-8")
+                except OSError:
+                    self._send(500, "web/deck.html is missing", "text/plain")
+            elif path == "/manifest.webmanifest":
+                self._send(200, json.dumps({
+                    "name": "Hallway", "short_name": "Hallway", "start_url": "/#glance",
+                    "display": "standalone", "background_color": "#04080d", "theme_color": "#04080d",
+                    "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}]}),
+                    "application/manifest+json")
+            elif path == "/icon.svg":
+                self._send(200, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+                           '<rect width="64" height="64" rx="14" fill="#04080d"/>'
+                           '<circle cx="32" cy="32" r="18" fill="none" stroke="#5ef2ff" stroke-width="3"/>'
+                           '<circle cx="32" cy="32" r="7" fill="#5ef2ff"/>'
+                           '<circle cx="47" cy="20" r="4" fill="#ffb547"/></svg>', "image/svg+xml")
+            elif path == "/api/deck":
+                c = connect()
+                try:
+                    self._send(200, json.dumps(deck_state(c)))
+                finally:
+                    c.close()
+            else:
+                self._send(404, "not found", "text/plain")
+
+        def do_POST(self):
+            if not self._allowed():
+                return
+            if self.path.split("?")[0] != "/api/reply":
+                return self._send(404, "not found", "text/plain")
+            if not self._same_origin():
+                return self._send(403, json.dumps({"error": "cross-site request refused"}))
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                data = json.loads(self.rfile.read(n) or b"{}")
+                text = (data.get("text") or "").strip()[:4000]
+                if not text:
+                    return self._send(400, json.dumps({"error": "empty reply"}))
+                c = connect()
+                try:
+                    mid = _deck_reply(c, data.get("handle") or "", text)
+                finally:
+                    c.close()
+                if not mid:
+                    return self._send(404, json.dumps({"error": "no such session"}))
+                self._send(200, json.dumps({"id": mid}))
+            except Exception as e:
+                self._send(500, json.dumps({"error": str(e)}))
+
+    srv = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
+    print("Hallway deck on http://%s:%d  (Ctrl+C to stop)" % (args.host, args.port))
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+def cmd_relay(conn, args):
+    """Block until you reply to a session from the deck, then print how to deliver it.
+
+    A running, idle session does not read the board by itself, and only an agent can
+    push a message into it. So one Claude session acts as the relay: it runs this in
+    the background, and when it returns, delivers the reply and runs it again.
+    """
+    deadline = now() + args.timeout
+    while True:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE sender=? AND tags='from-deck' AND recipient IS NOT NULL"
+            " AND ts > ? ORDER BY ts", (HUMAN, now() - 86400)).fetchall()
+        live = live_handles(conn)
+        todo = []
+        for m in rows:
+            if conn.execute("SELECT 1 FROM notified WHERE message_id=? AND handle=?",
+                            (m["id"], m["recipient"])).fetchone():
+                continue
+            reach = live.get(m["recipient"])
+            if not reach:
+                continue  # not running: it reads the board when it next starts
+            todo.append({"id": m["id"], "to": m["recipient"], "session_id": reach.get("host"),
+                         "text": m["body"]})
+            conn.execute("INSERT OR IGNORE INTO notified (message_id, handle, at) VALUES (?,?,?)",
+                         (m["id"], m["recipient"], now()))
+        if todo:
+            conn.commit()
+            print(json.dumps({"deliver": todo}, indent=1))
+            print("Deliver each with mcp__ccd_session_mgmt__send_message (session_id as given),"
+                  " prefixing the text with \"Your user replied from the Hallway deck:\". Then run"
+                  " `hallway relay` again in the background.")
+            return
+        if now() > deadline:
+            print("No replies in %d minutes. Run `hallway relay` again in the background." % (args.timeout // 60))
+            return
+        time.sleep(2)
+        conn.close()
+        conn = connect()
+
+
 def cmd_hook_start(conn, args):
     """Plugin SessionStart hook: install the shim, then print recent unread mail and the
     roster of other running sessions (stdout becomes the session's startup context)."""
@@ -1480,6 +1802,13 @@ def main():
     s.add_argument("--full", action="store_true", help="every update, not just the latest")
     s.add_argument("--json", action="store_true")
 
+
+    s = add("deck", cmd_deck, "serve the live deck (localhost; see README for phones)")
+    s.add_argument("--port", type=int, default=5055)
+    s.add_argument("--host", default="127.0.0.1")
+
+    s = add("relay", cmd_relay, "(relay session) wait for replies sent from the deck")
+    s.add_argument("--timeout", type=int, default=3300)
 
     s = add("pending", cmd_pending, "quiet unread summary (used by the session hook)")
 

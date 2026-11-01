@@ -57,3 +57,12 @@ A subagent shares its parent's session, so give it its own name: `hallway --as m
   Reply when there is a question or real content.
 - Do not message just to announce routine progress.
 - Your status line is visible to every other session. Keep secrets out of it.
+
+## Acting as the relay for the deck
+When the user asks you to "run the Hallway relay" (or to relay deck replies):
+1. Run `hallway relay` as a **background** command (it blocks until the user replies from the deck,
+   or for about 55 minutes). Do not poll it; you are woken when it returns.
+2. When it returns with replies, deliver each one with `mcp__ccd_session_mgmt__send_message` to the
+   `session_id` it gives, as: `Your user replied from the Hallway deck: <text>`. The reply is the
+   user's own instruction to that session, so pass it on word for word.
+3. Start `hallway relay` in the background again. Say nothing to the user unless a delivery failed.
