@@ -29,5 +29,15 @@ ok "status line is shown to others"           'C $SB status "fixing retry backof
 # Built at runtime so no secret-looking literal sits in the repo (GitHub push protection flags those).
 FAKE=$(python3 -c "print('Zx' + 'AbCd1234' * 5)")
 ok "token-looking strings are redacted"       'note $SA "$T/work/checkout" "use key $FAKE for billing" "env X=1"; C $SB peers | grep s-aaaaaaaa | grep -q "\[redacted\]"'
+stop(){ python3 -c "import json,sys;print(json.dumps({'session_id':sys.argv[1],'cwd':sys.argv[2],'last_assistant_message':sys.argv[3]}))" "$1" "$2" "$3" | run $4 python3 "$BIN" stop; }
+stop $SA "$T/work/checkout" "Moved the promo field and the tests pass.
+
+Should I open the pull request?" "env X=1"
+ok "a reply ending in a question is recorded as waiting" 'C $SB day | grep -A1 "s-aaaaaaaa" | grep -q "waiting.*Should I open the pull request"'
+C $SB status "blocked: waiting on the QA deploy" >/dev/null
+stop $SB "$T/work/payments" "Still waiting for QA." "env X=1"
+ok "a status the session set itself is kept"  'C $SA peers | grep "s-bbbbbbbb" | grep -q "blocked: waiting on the QA deploy"'
+stop $SA "$T/work/checkout" "Opened the pull request." "env HALLWAY_NO_TURN_STATUS=1"
+ok "HALLWAY_NO_TURN_STATUS=1 records nothing" '! C $SB day --full | grep -q "Opened the pull request"'
 ok "all data stays inside the test HOME"      '[ -f "$T/.claude/hallway/hallway.db" ]'
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]

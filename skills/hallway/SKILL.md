@@ -20,6 +20,8 @@ hallway find <topic words>                   # which session owns this area? (ru
 hallway send <handle> -s "Subject" -m "..."  # ask a question or propose a design decision
 hallway notify                               # how to wake a running, idle session
 hallway status "what I am doing"             # one line other sessions see; set it when you start
+hallway status "blocked: waiting on QA"      # say so when you are blocked; it is kept over the automatic one
+hallway day --full                           # what every session finished or is waiting on, last 24 hours
 ```
 Do this on your own when your work touches another session's area, when two sessions could make
 conflicting choices, or when you need something another session already knows. Ask, then carry on

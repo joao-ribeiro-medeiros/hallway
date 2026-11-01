@@ -90,6 +90,13 @@ CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT
 );
+CREATE TABLE IF NOT EXISTS status_log (
+    handle  TEXT,
+    at      REAL,
+    kind    TEXT,   -- done | waiting | blocked | set (an explicit `hallway status`)
+    text    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_status_log ON status_log(handle, at);
 CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
 CREATE INDEX IF NOT EXISTS idx_msg_recipient ON messages(recipient);
 CREATE INDEX IF NOT EXISTS idx_msg_channel ON messages(channel);
@@ -1187,8 +1194,140 @@ def cmd_status(conn, args):
         return
     conn.execute("UPDATE agents SET status=?, status_at=? WHERE handle=?",
                  (text, now() if text else None, handle))
+    if text:
+        kind = "blocked" if text.lower().startswith("blocked") else "set"
+        conn.execute("INSERT INTO status_log (handle, at, kind, text) VALUES (?,?,?,?)",
+                     (handle, now(), kind, text))
     conn.commit()
     print("status %s" % ("cleared" if args.clear else "set: " + text))
+
+
+def _last_assistant_text(d):
+    """The final assistant message of the turn that just ended."""
+    text = d.get("last_assistant_message")
+    if isinstance(text, str) and text.strip():
+        return text
+    path = d.get("transcript_path")
+    if not path:
+        return ""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - 400000))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if rec.get("type") != "assistant":
+            continue
+        parts = (rec.get("message") or {}).get("content") or []
+        if isinstance(parts, str):
+            return parts
+        texts = [p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text"]
+        if any(t.strip() for t in texts):
+            return "\n".join(texts)
+    return ""
+
+
+def _summarize_turn(text):
+    """(kind, one line) for a finished turn. It is 'waiting' when the reply ends by
+    asking the user something, otherwise 'done'. Costs no model call."""
+    plain = re.sub(r"```.*?```", " ", text, flags=re.S)
+    plain = re.sub(r"[*_`>#]+", "", plain)
+    paras = [p.strip() for p in re.split(r"\n\s*\n", plain) if p.strip()]
+    if not paras:
+        return None, ""
+    kind = "waiting" if paras[-1].rstrip().endswith("?") else "done"
+    first = re.split(r"(?<=[.!?])\s", " ".join(paras[0].split()), maxsplit=1)[0]
+    if kind == "waiting":
+        q = re.split(r"(?<=[.!?])\s", " ".join(paras[-1].split()))[-1]
+        first = "%s Asks: %s" % (first, q) if q != first else first
+    return kind, _clean(first, 240)
+
+
+def cmd_stop(conn, args):
+    """Stop hook (async, silent): when a turn ends, record what the session finished or is
+    waiting on, so a check-in can read the board instead of asking every session."""
+    if os.environ.get("HALLWAY_NO_TURN_STATUS"):
+        return
+    try:
+        d = json.load(sys.stdin)
+    except Exception:
+        return
+    kind, line = _summarize_turn(_last_assistant_text(d))
+    if not line:
+        return
+    if d.get("session_id"):
+        os.environ["CLAUDE_CODE_SESSION_ID"] = d["session_id"]
+    if d.get("cwd"):
+        try:
+            os.chdir(d["cwd"])
+        except OSError:
+            pass
+    handle = touch_agent(conn, detect_identity(args.a_as))
+    row = conn.execute("SELECT prompt_at FROM agents WHERE handle=?", (handle,)).fetchone()
+    turn_start = (row["prompt_at"] if row else None) or 0
+    last = conn.execute("SELECT kind, text, at FROM status_log WHERE handle=? ORDER BY at DESC"
+                        " LIMIT 1", (handle,)).fetchone()
+    if last and last["text"] == line:
+        return
+    conn.execute("INSERT INTO status_log (handle, at, kind, text) VALUES (?,?,?,?)",
+                 (handle, now(), kind, line))
+    # A status the agent set itself during this turn says more than a summary does.
+    if not (last and last["kind"] in ("set", "blocked") and last["at"] >= turn_start):
+        conn.execute("UPDATE agents SET status=?, status_at=? WHERE handle=?",
+                     ("%s: %s" % ("waiting on you" if kind == "waiting" else "finished", line),
+                      now(), handle))
+    conn.commit()
+
+
+def cmd_day(conn, args):
+    """What every session reported over a day, grouped by session, for check-ins."""
+    if args.date:
+        start = time.mktime(time.strptime(args.date, "%Y-%m-%d"))
+        end = start + 86400
+    else:
+        end = now()
+        start = end - args.hours * 3600
+    rows = conn.execute(
+        "SELECT l.handle, l.at, l.kind, l.text, a.title, a.session_id, a.project, a.last_prompt"
+        " FROM status_log l LEFT JOIN agents a ON a.handle = l.handle"
+        " WHERE l.at >= ? AND l.at < ? ORDER BY l.handle, l.at", (start, end)).fetchall()
+    if not rows:
+        print("No session reported anything in that period.")
+        return
+    titles = session_titles()
+    by = {}
+    for r in rows:
+        by.setdefault(r["handle"], []).append(r)
+    out = []
+    for h, items in by.items():
+        r0 = items[0]
+        meta = titles.get(r0["session_id"] or "") or {}
+        pr = "PR #%s %s" % (meta["pr"], (meta.get("pr_state") or "").lower()) if meta.get("pr") else ""
+        out.append({
+            "handle": h, "title": r0["title"] or meta.get("title") or "(untitled)",
+            "project": r0["project"], "branch": meta.get("branch") or "", "pr": pr.strip(),
+            "latest": {"kind": items[-1]["kind"], "text": items[-1]["text"],
+                       "at": items[-1]["at"]},
+            "updates": [{"at": i["at"], "kind": i["kind"], "text": i["text"]} for i in items],
+        })
+    out.sort(key=lambda c: c["latest"]["at"], reverse=True)
+    if args.json:
+        print(json.dumps(out, indent=1))
+        return
+    for c in out:
+        bits = "; ".join(b for b in (c["project"], c["branch"], c["pr"]) if b)
+        print("%s [%s] (%s)" % (c["title"], c["handle"], bits))
+        print("  latest (%s, %s): %s" % (c["latest"]["kind"], ago(c["latest"]["at"]), c["latest"]["text"]))
+        if args.full:
+            for u in c["updates"][:-1]:
+                print("    %s %s: %s" % (time.strftime("%H:%M", time.localtime(u["at"])), u["kind"], u["text"]))
+        print()
 
 
 def cmd_note(conn, args):
@@ -1332,6 +1471,15 @@ def main():
     s.add_argument("-n", type=int, default=8)
 
     s = add("note", cmd_note, "(hook) record the user's latest request as your activity")
+
+    s = add("stop", cmd_stop, "(hook) record what a session finished or is waiting on")
+
+    s = add("day", cmd_day, "what every session reported over a day (for check-ins)")
+    s.add_argument("--date", help="a calendar day, YYYY-MM-DD (local time)")
+    s.add_argument("--hours", type=float, default=24, help="or the last N hours (default 24)")
+    s.add_argument("--full", action="store_true", help="every update, not just the latest")
+    s.add_argument("--json", action="store_true")
+
 
     s = add("pending", cmd_pending, "quiet unread summary (used by the session hook)")
 
