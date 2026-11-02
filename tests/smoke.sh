@@ -50,6 +50,7 @@ code(){ curl -s -o /dev/null -w "%{http_code}" "$@"; }
 ok "a cross-site form post is refused"        '[ "$(code -X POST -H "Content-Type: text/plain" -H "Origin: https://evil.example" -d "$BAD" "http://127.0.0.1:$PORT/api/reply")" = 403 ]'
 ok "a rebound host name is refused"           '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Host: evil.example" "http://127.0.0.1:$PORT/api/deck")" = 403 ]'
 kill $PD 2>/dev/null; wait $PD 2>/dev/null
-ok "the relay hands the reply to the running session" 'C $SB relay --timeout 5 | grep -q "Yes, open it."'
+ok "the relay hands the reply to the running session" 'C $SB relay --timeout 5 | grep -q "\[Hallway\] From your user: Yes, open it."'
+ok "inbox names a peer sender as a session, not the user" 'C $SA inbox --all | grep -q "from another Claude session"'
 ok "all data stays inside the test HOME"      '[ -f "$T/.claude/hallway/hallway.db" ]'
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]
