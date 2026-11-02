@@ -1570,7 +1570,10 @@ def cmd_deck(conn, args):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the phone went to sleep mid-request
 
         def _allowed(self):
             # Behind `tailscale serve`, Tailscale says who is asking. Only the people

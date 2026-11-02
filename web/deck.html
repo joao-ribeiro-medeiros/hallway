@@ -179,6 +179,22 @@ button,textarea{font:inherit;color:inherit}
 .tabbar a.on{color:var(--cyan)}
 .tabbar i{display:block;width:22px;height:22px;margin:0 auto 4px;border:1.6px solid currentColor;border-radius:7px}
 body.phone .top{display:none}
+#compose{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:rgba(2,5,9,.72);backdrop-filter:blur(6px);padding:16px}
+#compose.on{display:flex}
+#compose .box{width:min(560px,100%);border:1px solid var(--line2);border-radius:10px;background:linear-gradient(180deg,#0d1a26,#08111a);padding:20px 20px 16px;box-shadow:0 30px 90px rgba(0,0,0,.6),0 0 60px rgba(94,242,255,.08)}
+#compose .k{font:600 10px var(--mono);letter-spacing:.16em}
+#compose .t{font:600 18px var(--sans);color:#fff;margin:6px 0 4px}
+#compose .d{font:400 13px/1.45 var(--sans);color:#9cb7c2;margin-bottom:12px;max-height:5.8em;overflow:hidden}
+#compose textarea{width:100%;min-height:110px;resize:vertical;background:rgba(0,0,0,.35);border:1px solid var(--line2);border-radius:6px;color:#fff;padding:12px;font:400 15px/1.45 var(--sans);outline:none}
+#compose textarea:focus{border-color:var(--cyan)}
+#compose .row{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:12px;flex-wrap:wrap}
+#compose .note{font:500 10.5px var(--mono);letter-spacing:.06em;color:var(--dim)}
+.srow{all:unset;box-sizing:border-box;cursor:pointer;display:flex;gap:12px;align-items:flex-start;width:100%;padding:12px 22px;border-bottom:1px solid rgba(94,242,255,.07)}
+.srow .sd{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none}
+.srow .st{font:600 14px var(--sans);color:#fff}
+.srow .ss{font:400 12px/1.4 var(--sans);color:#93afba;margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.srow .sk{font:500 9.5px var(--mono);letter-spacing:.12em;margin-top:4px}
+.msg{cursor:pointer}
 @media (max-width:1180px){ #deck .right{display:none} #orbWrap{right:22px} #deck .bottom{right:42px} }
 </style>
 </head>
@@ -235,10 +251,14 @@ body.phone .top{display:none}
   <div class="mt"><div><div class="hud" style="color:var(--cyan)">HALLWAY</div><h3 id="gTitle"></h3></div><div class="hud" id="gClock"></div></div>
   <svg class="ring" id="gRing" width="330" height="210" viewBox="0 0 330 210"></svg>
   <div id="gNow"><div class="gsec"><span>NEEDS YOU</span><span id="gNeedN"></span></div><div id="gNeed"></div></div>
+  <div id="gAll"><div class="gsec"><span>ALL SESSIONS · TAP TO MESSAGE</span><span id="gAllN"></span></div><div id="gList"></div></div>
   <div id="gComms"><div class="gsec"><span>LIVE COMMS</span><span></span></div><div id="gFeed"></div></div>
   <div id="gDone"><div class="gsec"><span>FINISHED · 24H</span><span></span></div><div id="gFin"></div></div>
-  <nav class="tabbar"><a href="#glance" data-to="gNow" class="on"><i></i>Now</a><a href="#glance" data-to="gComms"><i style="border-radius:50%"></i>Comms</a><a href="#glance" data-to="gDone"><i style="border-radius:3px"></i>Finished</a><a href="#deck"><i></i>Deck</a></nav>
+  <nav class="tabbar"><a href="#glance" data-to="gNow" class="on"><i></i>Now</a><a href="#glance" data-to="gAll"><i style="border-radius:3px"></i>Sessions</a><a href="#glance" data-to="gComms"><i style="border-radius:50%"></i>Comms</a><a href="#deck"><i></i>Deck</a></nav>
 </section>
+<div id="compose"><div class="box"><div class="k" id="cmK"></div><div class="t" id="cmT"></div><div class="d" id="cmD"></div>
+  <textarea id="cmText" placeholder="Message this session…"></textarea>
+  <div class="row"><span class="note" id="cmNote"></span><span style="display:flex;gap:8px"><button class="btn" id="cmCancel">CANCEL</button><button class="btn p" id="cmSend">SEND</button></span></div></div></div>
 <div id="nodeTip"></div>
 <div class="scan"></div>
 
@@ -322,7 +342,32 @@ function needCard(s, opts = {}) {
   return d;
 }
 const keepOpen = new Set(), drafts = {};
-const editing = () => document.activeElement && document.activeElement.tagName === "TEXTAREA";
+
+/* message any session, not just the ones waiting on you */
+let composeTo = null;
+function compose(s) {
+  composeTo = s;
+  $("#cmK").textContent = LABEL[s.state] + " · " + s.group.toUpperCase() + (s.live ? "" : " · CLOSED");
+  $("#cmK").style.color = COL[s.state];
+  $("#cmT").textContent = s.title;
+  $("#cmD").textContent = s.state === "wait" ? question(s.said) : (s.said || s.prompt || "");
+  $("#cmNote").textContent = s.live ? "IT GETS THIS AS A NEW TURN, AS IF YOU TYPED IT" : "NOT RUNNING · IT READS THIS WHEN IT NEXT STARTS";
+  $("#cmNote").style.color = ""; $("#cmText").value = drafts[s.handle] || "";
+  $("#compose").classList.add("on"); setTimeout(() => $("#cmText").focus(), 50);
+}
+const closeCompose = () => { $("#compose").classList.remove("on"); composeTo = null; };
+$("#cmCancel").onclick = closeCompose;
+$("#compose").onclick = e => { if (e.target.id === "compose") closeCompose(); };
+$("#cmText").oninput = () => composeTo && (drafts[composeTo.handle] = $("#cmText").value);
+addEventListener("keydown", e => { if (e.key === "Escape") closeCompose();
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && composeTo) $("#cmSend").click(); });
+$("#cmSend").onclick = async () => { const s = composeTo, v = $("#cmText").value.trim(); if (!s || !v) return;
+  $("#cmNote").textContent = "SENDING…";
+  try { await sendReply(s.handle, v); delete drafts[s.handle]; $("#cmNote").style.color = "var(--green)";
+    $("#cmNote").textContent = "✓ SENT"; setTimeout(closeCompose, 700); }
+  catch (e) { $("#cmNote").style.color = "var(--red)"; $("#cmNote").textContent = "NOT SENT: " + e.message; } };
+const byHandle = h => S.sessions.find(s => s.handle === h);
+const editing = () => document.activeElement && document.activeElement.tagName === "TEXTAREA" && document.activeElement.id !== "cmText";
 
 /* =============================================================== render */
 function render() {
@@ -354,7 +399,7 @@ function finished() {
 function renderNeedList(el, att, opts) {
   if (editing() && el.contains(document.activeElement)) return;
   el.innerHTML = "";
-  if (!att.length) { el.innerHTML = `<div class="empty"><b>Nothing needs you.</b>${S.sessions.filter(s => s.state === "work").length} sessions are working. When one finishes by asking you something, it shows up here.</div>`; return; }
+  if (!att.length) { el.innerHTML = `<div class="empty"><b>Nothing needs you.</b>${(n => n === 1 ? "1 session is" : n + " sessions are")(S.sessions.filter(s => s.state === "work").length)} working. When one finishes by asking you something, it shows up here. To message any session, tap it.</div>`; return; }
   for (const s of att) el.appendChild(needCard(s, opts));
 }
 function renderFinished(el) {
@@ -455,7 +500,7 @@ function buildOrbit() {
       const lt = svg("text", {x:L.lx, y:P.y + L.dy - 3, "text-anchor":an, fill:n.state === "idle" ? "#6d8896" : "#e4fbff", "font-family":"Space Grotesk, sans-serif", "font-size":12, "font-weight":500}, g); lt.textContent = L.txt;
       const ls = svg("text", {x:L.lx, y:P.y + L.dy + 10, "text-anchor":an, fill:col, "font-family":"JetBrains Mono, monospace", "font-size":8.5, "letter-spacing":1.5}, g); ls.textContent = L.sub; }
     g.onmouseenter = e => showTip(n, e); g.onmousemove = moveTip; g.onmouseleave = () => $("#nodeTip").style.display = "none";
-    g.onclick = () => { if (n.state === "wait" || n.state === "block") { focusOn = n.handle; location.hash = "#focus"; } };
+    g.onclick = () => { $("#nodeTip").style.display = "none"; compose(n); };
   }
   packetLayer = svg("g", {}, orb);
 }
@@ -509,12 +554,14 @@ function msgEl(m, typing) {
   const b = d.querySelector(".b");
   if (typing) { b.classList.add("cur"); let i = 0; const body = m.body || ""; const ty = setInterval(() => { b.textContent = body.slice(0, i += 3); if (i >= body.length) { clearInterval(ty); b.classList.remove("cur"); } }, 16); }
   else b.textContent = m.body || "";
+  d.onclick = () => { const s = byHandle(m.sender === S.human ? m.recipient : m.sender); if (s) compose(s); };
+  d.title = "Click to message " + name(m.sender === S.human ? m.recipient : m.sender);
   return d;
 }
 function feedMessages() {
   const fresh = [];
   for (const m of [...S.messages].reverse()) if (!seenMsgs.has(m.id)) { seenMsgs.add(m.id); if (!firstLoad) fresh.push(m); }
-  for (const [el, n] of [[$("#feed"), 40], [$("#gFeed"), 12]]) {
+  for (const [el, n] of [[$("#feed"), 40], [$("#gFeed"), 6]]) {
     if (firstLoad || !el.children.length) { el.innerHTML = ""; S.messages.slice(0, n).forEach(m => el.appendChild(msgEl(m, false))); continue; }
     for (const m of fresh) { el.prepend(msgEl(m, true)); while (el.children.length > n) el.lastChild.remove(); }
   }
@@ -539,7 +586,7 @@ function renderWall() {
       for (const s of list.filter(x => x.state === st)) { const c = document.createElement("div"); c.className = "card " + st + (s.live ? "" : " off"); c.id = "w-" + s.handle;
         const txt = st === "wait" ? question(s.said) : (s.said || s.prompt);
         c.innerHTML = `<div class="ct">${esc(s.title)}</div><div class="cs">${esc(short(txt, 180))}</div><div class="cm">${s.branch ? `<span class="tag">${esc(short(s.branch, 30))}</span>` : ""}${s.pr ? `<span class="tag">PR #${s.pr} ${esc((s.pr_state || "").toLowerCase())}</span>` : ""}<span class="tag">${s.live ? ago(st === "work" || st === "wait" || st === "block" ? s.since : s.active) : "closed"}</span></div>${st === "work" ? '<div class="bar"><i></i></div>' : ""}`;
-        if (st === "wait" || st === "block") { c.style.cursor = "pointer"; c.onclick = () => { focusOn = s.handle; location.hash = "#focus"; }; }
+        c.style.cursor = "pointer"; c.onclick = () => compose(s);
         cell.appendChild(c); }
       g.appendChild(cell); }
   }
@@ -608,6 +655,12 @@ function renderGlance(att) {
   $("#gNeedN").textContent = att.length;
   renderNeedList($("#gNeed"), att, {phone:true, group:true});
   renderFinished($("#gFin"));
+  const order = {wait:0, block:1, work:2, idle:3, done:4}, list = $("#gList");
+  const all = [...S.sessions].sort((a, b) => (b.live - a.live) || order[a.state] - order[b.state] || b.active - a.active);
+  $("#gAllN").textContent = all.length; list.innerHTML = "";
+  for (const x of all) { const b = document.createElement("button"); b.className = "srow";
+    b.innerHTML = `<span class="sd" style="background:${COL[x.state]};box-shadow:0 0 8px ${COL[x.state]}"></span><span style="min-width:0"><div class="st">${esc(x.title)}</div><div class="ss">${esc(short(x.state === "wait" ? question(x.said) : (x.said || x.prompt), 140))}</div><div class="sk" style="color:${COL[x.state]}">${LABEL[x.state]} · ${esc(x.group.toUpperCase())}${x.live ? "" : " · CLOSED"}</div></span>`;
+    b.onclick = () => compose(x); list.appendChild(b); }
   const counts = {work:sessionsBy("work").length + sessionsBy("idle").filter(s => s.live).length, wait:nw, block:sessionsBy("block").length};
   const sig = JSON.stringify(counts); if (sig === ringSig) return; ringSig = sig;
   const s = $("#gRing"); s.innerHTML = ""; const cx = 165, cy = 108, total = Math.max(1, S.sessions.filter(x => x.live).length);
