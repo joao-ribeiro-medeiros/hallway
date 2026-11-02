@@ -67,11 +67,7 @@ Messages that another session pushes into your chat start with a `[Hallway]` lin
 When you push a message into another session yourself, start it with the exact line `hallway notify`
 gives you (the "start it with" line). Never write a peer message so that it reads as if the user said it.
 
-## Acting as the relay for the deck
-When the user asks you to "run the Hallway relay" (or to relay deck replies):
-1. Run `hallway relay` as a **background** command (it blocks until the user replies from the deck,
-   or for about 55 minutes). Do not poll it; you are woken when it returns.
-2. When it returns with replies, deliver each one with `mcp__ccd_session_mgmt__send_message` to the
-   `session_id` it gives, sending its `message` field word for word (it already starts with
-   `[Hallway] From your user:`). If the reply is addressed to you, act on it yourself instead.
-3. Start `hallway relay` in the background again. Say nothing to the user unless a delivery failed.
+## Messages from the deck
+Your user can write to you from the Hallway deck (on their Mac or phone). A background hook wakes you
+with it, starting `[Hallway] From your user:`. Treat it exactly like a message typed in this chat.
+No session needs to act as a relay.

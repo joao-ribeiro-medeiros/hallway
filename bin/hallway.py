@@ -1746,6 +1746,81 @@ def cmd_relay(conn, args):
         conn = connect()
 
 
+def _wakes(conn, handle, m):
+    """Should this message wake an idle session? Your own words always do; another
+    agent's only when marked urgent, so two polite agents cannot keep waking each other."""
+    if m["recipient"] != handle:
+        return False
+    if m["sender"] in HUMAN_HANDLES:
+        return True
+    return m["priority"] == "high"
+
+
+def cmd_wait(conn, args):
+    """Stop hook (asyncRewake): wait, without using any tokens, for mail that should wake
+    this session. When some arrives, print it and exit 2, which wakes the session with it.
+
+    One waiter per session: a later turn's hook finds the running waiter and leaves it be.
+    """
+    try:
+        d = json.load(sys.stdin)
+    except Exception:
+        d = {}
+    if d.get("session_id"):
+        os.environ["CLAUDE_CODE_SESSION_ID"] = d["session_id"]
+    if d.get("cwd"):
+        try:
+            os.chdir(d["cwd"])
+        except OSError:
+            pass
+    handle = touch_agent(conn, detect_identity(args.a_as))
+    lockdir = os.path.join(ROOT, "waiters")
+    os.makedirs(lockdir, exist_ok=True)
+    lock = os.path.join(lockdir, handle + ".pid")
+    try:
+        other = int(open(lock).read().strip())
+        if other != os.getpid() and _pid_alive(other):
+            return  # already waiting for this session
+    except Exception:
+        pass
+    with open(lock, "w") as fh:
+        fh.write(str(os.getpid()))
+    parent = os.getppid()
+    deadline = now() + args.timeout
+    try:
+        while now() < deadline:
+            if os.getppid() != parent:
+                return  # the session ended
+            rows = conn.execute(
+                "SELECT * FROM messages WHERE recipient=? AND ts > ? ORDER BY ts",
+                (handle, now() - 86400)).fetchall()
+            due = [m for m in rows if _wakes(conn, handle, m) and not conn.execute(
+                "SELECT 1 FROM notified WHERE message_id=? AND handle=?", (m["id"], handle)).fetchone()
+                and not conn.execute(
+                "SELECT 1 FROM reads WHERE message_id=? AND handle=?", (m["id"], handle)).fetchone()]
+            if due:
+                out = []
+                for m in due:
+                    conn.execute("INSERT OR IGNORE INTO notified (message_id, handle, at) VALUES (?,?,?)",
+                                 (m["id"], handle, now()))
+                    out.append("%s %s" % (push_header(conn, m), m["body"] or m["subject"] or ""))
+                mark_read(conn, handle, [m["id"] for m in due])
+                conn.commit()
+                sys.stderr.write("\n\n".join(out) + "\n")
+                sys.stdout.write("\n\n".join(out) + "\n")
+                sys.stdout.flush()
+                os._exit(2)
+            time.sleep(2)
+            conn.close()
+            conn = connect()
+    finally:
+        try:
+            if int(open(lock).read().strip()) == os.getpid():
+                os.remove(lock)
+        except Exception:
+            pass
+
+
 def cmd_hook_start(conn, args):
     """Plugin SessionStart hook: install the shim, then print recent unread mail and the
     roster of other running sessions (stdout becomes the session's startup context)."""
@@ -1843,7 +1918,10 @@ def main():
     s.add_argument("--port", type=int, default=5055)
     s.add_argument("--host", default="127.0.0.1")
 
-    s = add("relay", cmd_relay, "(relay session) wait for replies sent from the deck")
+    s = add("wait", cmd_wait, "(hook) wake this session when you message it from the deck")
+    s.add_argument("--timeout", type=int, default=6 * 3600)
+
+    s = add("relay", cmd_relay, "(old) deliver deck replies from one session; `wait` replaces this")
     s.add_argument("--timeout", type=int, default=3300)
 
     s = add("pending", cmd_pending, "quiet unread summary (used by the session hook)")

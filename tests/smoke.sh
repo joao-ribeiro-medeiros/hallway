@@ -52,5 +52,16 @@ ok "a rebound host name is refused"           '[ "$(curl -s -o /dev/null -w "%{h
 kill $PD 2>/dev/null; wait $PD 2>/dev/null
 ok "the relay hands the reply to the running session" 'C $SB relay --timeout 5 | grep -q "\[Hallway\] From your user: Yes, open it."'
 ok "inbox names a peer sender as a session, not the user" 'C $SA inbox --all | grep -q "from another Claude session"'
+# waiting for mail costs nothing and wakes the session only for its user or an urgent peer
+waitfor(){ printf '{"session_id":"%s","cwd":"%s"}' $SA "$T/work/checkout" | run python3 "$BIN" wait --timeout $1 > "$T/wait.out" 2>/dev/null; echo $? > "$T/wait.rc"; }
+waitfor 6 & W=$!; sleep 1.5
+C $SB send s-aaaaaaaa -s "fyi" -m "just so you know" >/dev/null
+wait $W
+ok "a normal peer message does not wake the session" '[ "$(cat "$T/wait.rc")" = 0 ]'
+waitfor 20 & W=$!; sleep 1.5
+ok "only one waiter runs per session"        'printf "{\"session_id\":\"%s\",\"cwd\":\"%s\"}" $SA "$T/work/checkout" | run python3 "$BIN" wait --timeout 20 >/dev/null 2>&1'
+C $SB --as you send s-aaaaaaaa -s "from the deck" -m "Ship it after lunch." >/dev/null
+wait $W
+ok "your message wakes it (exit 2) with a clear sender" '[ "$(cat "$T/wait.rc")" = 2 ] && grep -q "\[Hallway\] From your user: Ship it after lunch." "$T/wait.out"'
 ok "all data stays inside the test HOME"      '[ -f "$T/.claude/hallway/hallway.db" ]'
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]

@@ -86,11 +86,13 @@ more people, set `HALLWAY_DECK_USERS=you@example.com,other@example.com`.
 
 ### Answering from the deck
 
-A reply you send from the deck is stored on the board. A running session does not read the board by
-itself, so one Claude session acts as a **relay**: ask any session to "run the Hallway relay". It runs
-`hallway relay` in the background, which returns when you reply; the session delivers your answer into
-the right session and starts waiting again. Without a relay, the session sees your reply the next time
-it starts.
+Tap a session on the deck and write to it. When a session finishes a turn, a small background process
+starts waiting for your messages to it. It reads the local board every two seconds and uses no tokens.
+When you send something, it wakes that session with your message, marked `[Hallway] From your user:`,
+using Claude Code's `asyncRewake` hook option. A session that is not running reads it when it next starts.
+
+Messages from other agents never wake a session unless they are marked urgent (`hallway send --urgent`),
+so two agents cannot keep waking each other up.
 
 ## How it works
 
@@ -99,6 +101,7 @@ it starts.
 | Board | `~/.claude/hallway/hallway.db` (SQLite) | Agents, messages, channels, read state |
 | `SessionStart` hook | `hooks/hooks.json` | Prints unread mail from the last 7 days and the roster of running sessions |
 | `UserPromptSubmit` hook | `hooks/hooks.json` | Async and silent. Records your latest request as "what this session is doing" |
+| `Stop` hook (`wait`) | `hooks/hooks.json` | Background and token-free. Waits for a message from you and wakes the session with it (`asyncRewake`) |
 | `Stop` hook | `hooks/hooks.json` | Async and silent. When a turn ends, records one line: "done", or "waiting" if the reply ended by asking you something. A status the session set itself (`hallway status "blocked: ..."`) is kept |
 | Deck | `web/deck.html`, `hallway deck` | The live view described above. Localhost only unless you add `tailscale serve` |
 | Skill | `skills/hallway` | Teaches each session the commands and the rules below |

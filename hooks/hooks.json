@@ -32,6 +32,12 @@
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/run.sh\" stop",
             "async": true,
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/run.sh\" wait",
+            "asyncRewake": true,
+            "timeout": 21700
           }
         ]
       }

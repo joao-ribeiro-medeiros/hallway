@@ -316,7 +316,7 @@ function attention() { return [...sessionsBy("wait"), ...sessionsBy("block")].so
 function replyStatus(handle) {
   const mid = sent[handle]; if (!mid) return "";
   const m = S.messages.find(x => x.id === mid);
-  return m && m.delivered ? "✓ DELIVERED TO THE SESSION" : "✓ SENT · THE RELAY DELIVERS IT IN A FEW SECONDS";
+  return m && m.delivered ? "✓ DELIVERED TO THE SESSION" : "✓ SENT · IT REACHES THE SESSION IN A FEW SECONDS";
 }
 
 /* ------------------------------------------------------- needs-you card */
@@ -351,7 +351,7 @@ function compose(s) {
   $("#cmK").style.color = COL[s.state];
   $("#cmT").textContent = s.title;
   $("#cmD").textContent = s.state === "wait" ? question(s.said) : (s.said || s.prompt || "");
-  $("#cmNote").textContent = s.live ? "IT GETS THIS AS A NEW TURN, AS IF YOU TYPED IT" : "NOT RUNNING · IT READS THIS WHEN IT NEXT STARTS";
+  $("#cmNote").textContent = s.live ? "IT WAKES UP WITH THIS, AS IF YOU TYPED IT" : "NOT RUNNING · IT READS THIS WHEN IT NEXT STARTS";
   $("#cmNote").style.color = ""; $("#cmText").value = drafts[s.handle] || "";
   $("#compose").classList.add("on"); setTimeout(() => $("#cmText").focus(), 50);
 }
