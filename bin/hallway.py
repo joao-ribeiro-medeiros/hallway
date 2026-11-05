@@ -1394,6 +1394,12 @@ def cmd_note(conn, args):
     conn.commit()
 
 
+def _version_of(text):
+    """(0, 3, 1) from a plugin cache path such as .../hallway/hallway/0.3.1/bin/hallway.py."""
+    m = re.search(r"[/\\]hallway[/\\](\d+)\.(\d+)\.(\d+)[/\\]bin", text or "")
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
 def _install_shim():
     """Put a `hallway` command on PATH (a plugin install otherwise leaves it unreachable).
     Idempotent and best-effort."""
@@ -1407,10 +1413,18 @@ def _install_shim():
                  if os.name == "nt" else '#!/bin/sh\nexec python3 "%s" "$@"\n' % me}
         if os.name == "nt":  # a .cmd as well, for cmd.exe and PowerShell
             shims["hallway.cmd"] = '@echo off\r\n"%s" "%s" %%*\r\n' % (sys.executable, me)
+        mine = _version_of(me)
         for name, want in shims.items():
             shim = os.path.join(d, name)
             try:
-                if open(shim, newline="").read() == want:
+                current = open(shim, newline="").read()
+                if current == want:
+                    continue
+                # A session started before an update still runs the old plugin. It must not
+                # point the command back at its old copy, or newer hooks call commands that
+                # copy does not have.
+                theirs = _version_of(current)
+                if theirs and (not mine or theirs > mine):
                     continue
             except Exception:
                 pass
@@ -1840,8 +1854,17 @@ def cmd_hook_start(conn, args):
     cmd_peers(conn, args)
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        # argparse exits 2 on a usage error, and exit 2 is what wakes a session from an
+        # asyncRewake hook. Exit 1 instead, so a bad command can never loop a session.
+        self.print_usage(sys.stderr)
+        sys.stderr.write("%s: error: %s\n" % (self.prog, message))
+        sys.exit(1)
+
+
 def main():
-    p = argparse.ArgumentParser(prog="hallway", description="Message board for Claude sessions and agents.")
+    p = _Parser(prog="hallway", description="Message board for Claude sessions and agents.")
     p.add_argument("--as", dest="a_as", help="act as this handle (for subagents/forks)")
     sub = p.add_subparsers(dest="cmd", required=True)
 

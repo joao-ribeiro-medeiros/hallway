@@ -63,5 +63,9 @@ ok "only one waiter runs per session"        'printf "{\"session_id\":\"%s\",\"c
 C $SB --as you send s-aaaaaaaa -s "from the deck" -m "Ship it after lunch." >/dev/null
 wait $W
 ok "your message wakes it (exit 2) with a clear sender" '[ "$(cat "$T/wait.rc")" = 2 ] && grep -q "\[Hallway\] From your user: Ship it after lunch." "$T/wait.out"'
+ok "a usage error exits 1, never the wake-up code 2" 'run python3 "$BIN" nosuchcommand >/dev/null 2>&1; [ $? = 1 ]'
+mkdir -p "$T/.local/bin"; printf '#!/bin/sh\nexec python3 "/x/hallway/hallway/9.9.9/bin/hallway.py" "$@"\n' > "$T/.local/bin/hallway"
+printf '{"session_id":"%s","cwd":"%s"}' $SB "$T/work/payments" | run python3 "$BIN" hook-start >/dev/null 2>&1
+ok "an older copy never repoints a newer shim" 'grep -q "9.9.9" "$T/.local/bin/hallway"'
 ok "all data stays inside the test HOME"      '[ -f "$T/.claude/hallway/hallway.db" ]'
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]
