@@ -42,6 +42,14 @@ ok "HALLWAY_NO_TURN_STATUS=1 records nothing" '! C $SB day --full | grep -q "Ope
 C $SA ledger set EE-1234 --title "Promo field" --status "PR open" --pr 42 --waiting-on Antonios --need "OK for the release?" >/dev/null
 C $SA ledger set EE-1234 --summary "Moves the promo field above the totals." >/dev/null
 ok "a ledger update only changes the fields given" 'C $SA ledger --json | grep -q "OK for the release?" && C $SA ledger --json | grep -q "Moves the promo field"'
+MS=$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"gh pr create --title \\"EE-77: x\\""},"tool_response":"https://github.com/o/r/pull/901"}' $SA | run python3 "$BIN" milestone)
+ok "opening a PR reminds the session to update its row" 'echo "$MS" | grep -q "hallway ledger set EE-77" && echo "$MS" | grep -q -- "--pr 901"'
+LS=$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"ls"}}' $SA | run python3 "$BIN" milestone)
+ok "an ordinary command adds nothing"         '[ -z "$LS" ]'
+LC=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at EE-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
+ok "a ticket with no row gets one nudge"      'echo "$LC" | grep -q "EE-88 but it has no Ledger row"'
+LC2=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at EE-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
+ok "and not again straight away"              '[ -z "$LC2" ]'
 PORT=$((20000 + RANDOM % 20000))
 run env HALLWAY_NO_GITHUB=1 python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!
 for i in $(seq 1 30); do curl -s -o /dev/null "http://127.0.0.1:$PORT/api/deck" && break; sleep .2; done

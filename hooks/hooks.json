@@ -20,6 +20,11 @@
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/run.sh\" note",
             "async": true,
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/run.sh\" ledger-check",
+            "timeout": 5
           }
         ]
       }
@@ -38,6 +43,18 @@
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/run.sh\" wait",
             "asyncRewake": true,
             "timeout": 21700
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|mcp__.*(jira|Jira).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/run.sh\" milestone",
+            "timeout": 10
           }
         ]
       }

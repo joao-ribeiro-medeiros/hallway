@@ -85,7 +85,14 @@ hallway ledger set EE-4236 --title "Kerio login failures" --summary "Stop checki
   --status "Ready to merge" --pr 6095 --waiting-on antonios --need "Does it ride 1.26.3?"
 ```
 
-Only the fields you pass change. Every open PR of yours that no session has reported still shows up
+Only the fields you pass change. Sessions are reminded at the right moments without anyone asking:
+a `PostToolUse` hook notices opening, merging or pushing to a PR, moving or commenting on a Jira
+ticket, and deploys, and tells the session to update its row; a `UserPromptSubmit` check nudges a
+session that is working on a ticket with no row, or a row a day old. Both are throttled, call no model,
+and add about 0.1 s. The deck also marks a row **outdated** when GitHub shows its PR merged, or CI
+failing on a PR the row calls ready.
+
+Every open PR of yours that no session has reported still shows up
 (from `gh search prs --author=@me`), so nothing slips; PRs untouched for 45 days are tucked away.
 Settings live in `~/.claude/hallway/deck.json`: `approvers` (e.g. `["antonios"]`) gets its own column of
 cards, `jira_url` links ticket keys, and `people` maps GitHub logins to names.

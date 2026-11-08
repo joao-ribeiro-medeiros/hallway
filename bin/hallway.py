@@ -1917,7 +1917,7 @@ class _GitHub:
 
     def __init__(self, every=180):
         import threading
-        self.every, self.prs, self.at, self.error = every, {}, 0, None
+        self.every, self.prs, self.merged, self.at, self.error = every, {}, {}, 0, None
         self.lock = threading.Lock()
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -1964,12 +1964,27 @@ class _GitHub:
             except Exception:
                 pass
             prs["%s#%s" % (repo, p["number"])] = d
+        merged = {}
+        try:
+            for p in self._gh("search", "prs", "--author=@me", "--merged", "--sort", "updated", "--limit", "60",
+                              "--json", "number,title,url,repository,updatedAt") or []:
+                repo = p["repository"]["nameWithOwner"]
+                merged["%s#%s" % (repo, p["number"])] = {
+                    "number": p["number"], "repo": repo, "title": p["title"], "url": p["url"], "draft": False,
+                    "updated": p["updatedAt"], "ci": "", "review": "", "reviewers": [], "branch": "",
+                    "mergeable": "", "merged": True}
+        except Exception:
+            pass
         with self.lock:
-            self.prs, self.at = prs, now()
+            self.prs, self.merged, self.at = prs, merged, now()
 
     def snapshot(self):
         with self.lock:
             return dict(self.prs), self.at, self.error
+
+    def merged_snapshot(self):
+        with self.lock:
+            return dict(self.merged)
 
 
 def _checked_out(cwd):
@@ -1995,6 +2010,7 @@ def ledger_state(conn, gh=None):
     approvers = [a.lower() for a in conf.get("approvers", [])]
     jira = conf.get("jira_url", "")
     prs, gh_at, gh_err = gh.snapshot() if gh else ({}, 0, "GitHub not checked")
+    merged = gh.merged_snapshot() if gh else {}
     # Which session owns a PR: the desktop app records each session's latest PR number,
     # and a worktree's checked-out branch usually names the PR's branch.
     by_branch, by_pr = {}, {}
@@ -2015,13 +2031,14 @@ def ledger_state(conn, gh=None):
         return {"handle": handle, "title": (a and a["title"]) or (meta or {}).get("title") or handle,
                 "host": host, "live": handle in live}
 
-    def find_pr(ref):
+    def find_pr(ref, pool=None):
+        pool = prs if pool is None else pool
         if not ref:
             return None
         ref = str(ref).lstrip("#")
-        if ref in prs:
-            return prs[ref]
-        hits = [p for k, p in prs.items() if k.endswith("#" + ref)]
+        if ref in pool:
+            return pool[ref]
+        hits = [p for k, p in pool.items() if k.endswith("#" + ref)]
         return hits[0] if len(hits) == 1 else None
 
     rows, seen_prs = [], set()
@@ -2029,10 +2046,19 @@ def ledger_state(conn, gh=None):
         if (r["status"] or "").lower() == "done" and t - r["updated"] > 7 * 86400:
             continue
         pr = find_pr(r["pr"])
+        outdated = ""
         if pr:
             seen_prs.add("%s#%s" % (pr["repo"], pr["number"]))
+            if pr["ci"] == "failing" and re.search(r"ready|approved", r["status"] or "", re.I):
+                outdated = "CI is failing on the PR"
+        else:
+            m = find_pr(r["pr"], merged)
+            if m:
+                pr = m
+                if not re.search(r"merged|in test|done|deployed|released", r["status"] or "", re.I):
+                    outdated = "the PR was merged after this row was last updated"
         rows.append({"ticket": r["ticket"], "title": r["title"] or "", "summary": r["summary"] or "",
-                     "status": r["status"] or "", "pr": r["pr"] or "", "pr_live": pr,
+                     "status": r["status"] or "", "pr": r["pr"] or "", "pr_live": pr, "outdated": outdated,
                      "waiting_on": (r["waiting_on"] or "").lower(), "need": r["need"] or "",
                      "updated": r["updated"], "session": session_of(r["handle"]), "source": "session"})
     # open PRs that no session has put on the ledger, so nothing slips
@@ -2070,6 +2096,146 @@ def ledger_state(conn, gh=None):
     return {"generated_at": t, "rows": rows, "approvers": approvers, "jira_url": jira,
             "people": {k.lower(): v for k, v in (conf.get("people") or {}).items()},
             "github_at": gh_at, "github_error": gh_err}
+
+
+# ------------------------------------------------------------------ ledger reminders
+# Two hooks keep the ledger current without anyone relaying a request:
+#   `milestone` (PostToolUse) notices the actions that change where a ticket stands
+#   (opening or merging a PR, pushing, moving a Jira ticket, deploying) and reminds the
+#   session right then; `ledger-check` (UserPromptSubmit) nudges a session that is
+#   working on a ticket whose row is missing or a day old. Neither calls a model; each
+#   adds at most one line of context, and both are throttled.
+
+MILESTONES = [
+    (re.compile(r"\bgh\s+pr\s+create\b"), "opened a pull request"),
+    (re.compile(r"\bgh\s+pr\s+merge\b"), "merged a pull request"),
+    (re.compile(r"\bgh\s+pr\s+ready\b"), "marked a pull request ready for review"),
+    (re.compile(r"\bgh\s+pr\s+edit\b.*--add-reviewer"), "requested a review"),
+    (re.compile(r"\bgh\s+workflow\s+run\b|\bdeploy"), "started a deploy"),
+    (re.compile(r"\bgit\s+push\b"), "pushed commits"),
+]
+JIRA_TOOL = re.compile(r"(jira_transition_issue|transitionJiraIssue|jira_add_comment|addCommentToJiraIssue)$")
+
+
+def _light_conn():
+    """A plain connection for hooks that must stay fast (no schema work or session sync)."""
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _hook_handle(conn, sid):
+    row = conn.execute("SELECT handle FROM agents WHERE session_id=? AND kind='session'"
+                       " ORDER BY last_seen DESC LIMIT 1", (sid,)).fetchone()
+    return row["handle"] if row else "s-" + sid[:8]
+
+
+def _throttled(key, seconds):
+    """True if this reminder already fired within `seconds` (state kept in a small file)."""
+    path = os.path.join(ROOT, "reminded.json")
+    try:
+        seen = json.load(open(path))
+    except Exception:
+        seen = {}
+    t = now()
+    seen = {k: v for k, v in seen.items() if t - v < 7 * 86400}
+    if t - seen.get(key, 0) < seconds:
+        return True
+    seen[key] = t
+    try:
+        tmp = path + ".tmp"
+        json.dump(seen, open(tmp, "w"))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return False
+
+
+def _context(event, text):
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}))
+
+
+def cmd_milestone(conn, args):
+    """PostToolUse hook: after an action that changes a ticket's state, remind the session
+    to update its ledger row."""
+    try:
+        d = json.load(sys.stdin)
+    except Exception:
+        return
+    tool, inp = d.get("tool_name") or "", d.get("tool_input") or {}
+    resp = d.get("tool_response")
+    resp = resp if isinstance(resp, str) else json.dumps(resp)[:4000] if resp else ""
+    what = None
+    if tool == "Bash":
+        cmd = inp.get("command") or ""
+        for rx, label in MILESTONES:
+            if rx.search(cmd):
+                what = label
+                break
+        text = cmd + " " + resp
+    elif JIRA_TOOL.search(tool):
+        what = "moved or commented on a Jira ticket"
+        text = json.dumps(inp)
+    else:
+        return
+    if not what or not os.path.exists(DB_PATH):
+        return
+    sid = d.get("session_id") or ""
+    c = _light_conn()
+    try:
+        handle = _hook_handle(c, sid)
+        tickets = sorted(set(TICKET_RE.findall(text)))[:3]
+        pr = re.search(r"/pull/(\d+)", resp or "") or re.search(r"\bgh\s+pr\s+\w+\s+(\d+)", text)
+        key = "%s|%s|%s" % (handle, what, ",".join(tickets))
+        # git push happens constantly; one reminder per ticket an hour is plenty
+        if _throttled(key, 3600 if what == "pushed commits" else 120):
+            return
+        rows = {r["ticket"]: r for r in c.execute("SELECT * FROM ledger WHERE handle=?", (handle,))}
+    finally:
+        c.close()
+    if what == "pushed commits" and tickets and all(t in rows and now() - rows[t]["updated"] < 3 * 3600 for t in tickets):
+        return  # rows are fresh; a push alone changes nothing the user needs to know
+    t = tickets[0] if tickets else "<TICKET>"
+    _context("PostToolUse",
+             "Hallway ledger: you just %s%s. If that changed where %s stands, update your user's Ledger row now "
+             "(only the fields you pass change): hallway ledger set %s --status \"...\"%s --waiting-on <you|name|ci|release|nobody> "
+             "--need \"...\"" % (what, " for " + ", ".join(tickets) if tickets else "", t, t,
+                                 " --pr " + pr.group(1) if pr else ""))
+
+
+def cmd_ledger_check(conn, args):
+    """UserPromptSubmit hook: nudge a session whose ticket has no ledger row, or a day-old one."""
+    try:
+        d = json.load(sys.stdin)
+    except Exception:
+        return
+    if not os.path.exists(DB_PATH):
+        return
+    sid = d.get("session_id") or ""
+    cwd = d.get("cwd") or ""
+    c = _light_conn()
+    try:
+        handle = _hook_handle(c, sid)
+        rows = {r["ticket"]: r for r in c.execute("SELECT * FROM ledger WHERE handle=?", (handle,))}
+    finally:
+        c.close()
+    branch = _checked_out(cwd) or ""
+    tickets = set(TICKET_RE.findall(branch.upper())) | set(TICKET_RE.findall(d.get("prompt") or ""))
+    missing = [t for t in tickets if t not in rows]
+    stale = [r["ticket"] for r in rows.values() if (r["status"] or "").lower() not in ("done", "merged")
+             and now() - (r["updated"] or 0) > 86400]
+    if not (missing or stale):
+        return
+    if _throttled("check|%s|%s" % (handle, ",".join(sorted(missing + stale))), 6 * 3600):
+        return
+    bits = []
+    if missing:
+        bits.append("you are working on %s but it has no Ledger row" % ", ".join(sorted(missing)))
+    if stale:
+        bits.append("your Ledger row for %s is more than a day old" % ", ".join(sorted(stale)))
+    _context("UserPromptSubmit",
+             "Hallway ledger: %s. When you next reach a stopping point, run `hallway ledger set <TICKET> --status ... "
+             "--waiting-on ... --need ...` so your user sees where it stands (or `--done` if it is finished)." % "; ".join(bits))
 
 
 def cmd_hook_start(conn, args):
@@ -2192,6 +2358,9 @@ def main():
     s.add_argument("--all", action="store_true", help="every session's rows, not just yours")
     s.add_argument("--json", action="store_true")
 
+    s = add("milestone", cmd_milestone, "(hook) remind a session to update its ledger row after a milestone")
+    s = add("ledger-check", cmd_ledger_check, "(hook) nudge a session whose ledger row is missing or old")
+
     s = add("deck", cmd_deck, "serve the live deck (localhost; see README for phones)")
     s.add_argument("--port", type=int, default=5055)
     s.add_argument("--host", default="127.0.0.1")
@@ -2238,6 +2407,13 @@ def main():
     # `reply` reuses cmd_send, which expects a target.
     if args.cmd == "reply":
         args.target = ""
+    if args.cmd in ("milestone", "ledger-check"):
+        # These run on every tool call or prompt, so they skip the full board setup.
+        try:
+            args.fn(None, args)
+        except Exception:
+            pass  # a reminder must never break the session
+        return
     conn = connect()
     try:
         args.fn(conn, args)

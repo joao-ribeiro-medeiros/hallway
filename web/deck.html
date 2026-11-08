@@ -224,6 +224,7 @@ button,textarea{font:inherit;color:inherit}
 .lwho .wt b{display:block;font-weight:600;color:#fff;font-size:13px}
 .lwho .wt span{display:block;font-size:11.5px;color:var(--dim)}
 .lsince{font:500 12px var(--mono);color:var(--dim);white-space:nowrap}
+.lout{display:block;margin-top:6px;font:600 9.5px var(--mono);letter-spacing:.08em;color:var(--red)}
 .lsince.old{color:var(--amber)}
 .ldet td{padding:0 14px 16px;border-bottom:1px solid rgba(94,242,255,.07);background:rgba(94,242,255,.06)}
 .ldetbox{display:grid;grid-template-columns:2fr 1fr;gap:18px;padding:14px 16px;border:1px solid var(--line);border-radius:8px;background:#08121b}
@@ -772,6 +773,7 @@ function prCell(r) {
   const p = r.pr_live;
   if (!p) return r.pr ? `<span>#${esc(String(r.pr).split("#").pop())}</span><span class="s">${r.status && /merged|done|in test/i.test(r.status) ? "merged" : ""}</span>` : "—";
   const bits = [];
+  if (p.merged) bits.push(`<span class="ok">merged</span>`);
   if (p.draft) bits.push(`<span class="mid">draft</span>`);
   if (p.ci) bits.push(`<span class="${p.ci === "green" ? "ok" : p.ci === "failing" ? "bad" : "mid"}">CI ${p.ci}</span>`);
   if (p.review) bits.push(`<span class="${p.review === "approved" ? "ok" : p.review === "changes_requested" ? "bad" : "mid"}">${p.review.replace("_", " ").toLowerCase()}</span>`);
@@ -826,7 +828,7 @@ function renderLedger() {
       const tr = document.createElement("tr"); tr.className = "row" + (lOpen === id ? " open" : "");
       tr.innerHTML = `<td><div class="lkey${ticketish(r.ticket) ? "" : " none"}">${esc(r.ticket)}</div><span class="lfrom">${r.session ? esc(r.session.title) : r.source === "github" ? "from GitHub, no session" : ""}</span></td>
         <td class="lsum"><b>${esc(r.title || r.ticket)}</b>${r.summary ? `<span>${esc(short(r.summary, 200))}</span>` : ""}</td>
-        <td><span class="lst" style="--sc:${STCOL(r.status)}">${esc((r.status || "—").toUpperCase())}</span></td>
+        <td><span class="lst" style="--sc:${STCOL(r.status)}">${esc((r.status || "—").toUpperCase())}</span>${r.outdated ? `<span class="lout" title="${esc(r.outdated)}">⚠ ROW OUTDATED</span>` : ""}</td>
         <td class="lpr">${prCell(r)}</td><td>${whoCell(r)}</td>
         <td class="lsince${old ? " old" : ""}">${ts ? ago(ts) : ""}</td>`;
       tr.onclick = () => { lOpen = lOpen === id ? null : id; renderLedger(); };
@@ -838,6 +840,7 @@ function renderLedger() {
             ${r.summary ? `<h4>WHAT IT IS</h4><p>${esc(r.summary)}</p>` : ""}
             ${r.need ? `<h4>WHAT'S NEEDED${r.waiting_on ? " FROM " + esc(personName(r.waiting_on).toUpperCase()) : ""}</h4><p class="q">${esc(r.need)}</p>` : ""}
             ${r.pr_live ? `<h4>PULL REQUEST</h4><p>${esc(r.pr_live.title)}${r.pr_live.reviewers.length ? "<br>Review requested from " + esc(r.pr_live.reviewers.join(", ")) : ""}${r.pr_live.mergeable === "conflicting" ? "<br><b style='color:var(--red)'>Merge conflict</b>" : ""}</p>` : ""}
+            ${r.outdated ? `<h4 style="color:var(--red)">OUTDATED</h4><p>The ledger says "${esc(r.status)}", but ${esc(r.outdated)}. The session will be reminded the next time it works on it.</p>` : ""}
             <h4>LAST UPDATED</h4><p>${r.updated ? new Date(r.updated * 1000).toLocaleString() + " by the session" : "Not reported by a session yet; this row comes from GitHub."}</p></div>
           <div class="lacts">${sess && sess.host && !document.body.classList.contains("phone") ? `<a class="fb p" href="claude://claude.ai/epitaxy/${esc(sess.host)}">Open the session</a>` : ""}
             ${sess && sess.handle ? `<button class="fb" data-msg>Message the session</button>` : ""}
