@@ -45,6 +45,8 @@ ok "a ledger update only changes the fields given" 'C $SA ledger --json | grep -
 MS=$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"gh pr create --title \\"EE-77: x\\""},"tool_response":"https://github.com/o/r/pull/901"}' $SA | run python3 "$BIN" milestone)
 ok "opening a PR reminds the session to update its row" 'echo "$MS" | grep -q "hallway ledger set EE-77" && echo "$MS" | grep -q -- "--pr 901"'
 LS=$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"ls"}}' $SA | run python3 "$BIN" milestone)
+HD=$(python3 -c "import json,sys;print(json.dumps({'session_id':sys.argv[1],'tool_name':'Bash','tool_input':{'command':\"cat >> notes.md <<'EOF'\\nremember: gh pr create needs a title\\nEOF\\ngit commit -m 'mention gh pr merge'\"}}))" $SA | run python3 "$BIN" milestone)
+ok "a command only mentioned in text is not a milestone" '[ -z "$HD" ]'
 ok "an ordinary command adds nothing"         '[ -z "$LS" ]'
 LC=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at EE-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
 ok "a ticket with no row gets one nudge"      'echo "$LC" | grep -q "EE-88 but it has no Ledger row"'

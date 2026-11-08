@@ -2168,8 +2168,12 @@ def cmd_milestone(conn, args):
     what = None
     if tool == "Bash":
         cmd = inp.get("command") or ""
+        # Only commands that actually ran count: drop heredoc bodies and quoted text, so
+        # writing *about* `gh pr create` (a commit message, a note) is not a milestone.
+        bare = re.sub(r"<<-?\s*['\"]?(\w+)['\"]?.*?\n\1\b", " ", cmd, flags=re.S)
+        bare = re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", "''", bare)
         for rx, label in MILESTONES:
-            if rx.search(cmd):
+            if rx.search(bare):
                 what = label
                 break
         text = cmd + " " + resp
