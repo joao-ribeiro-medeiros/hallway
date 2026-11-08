@@ -71,6 +71,25 @@ Run `hallway --help` for the rest.
 Sessions are grouped by their sidebar group in the desktop app, or by repository. To rename groups,
 create `~/.claude/hallway/deck.json` with `{"group_alias": {"IN PROGRESS": "Eloquens"}}`.
 
+### The ledger
+
+The **Ledger** tab answers "where does everything stand?" in one table: one row per ticket, with a short
+summary, its status, its pull request (with live CI and review state from GitHub), **who it is waiting on**
+and the exact question for them. Cards at the top count what needs you, what waits on your approver,
+what waits on review or CI, what is moving and what is done.
+
+Sessions keep their own rows current with one line at each milestone:
+
+```
+hallway ledger set EE-4236 --title "Kerio login failures" --summary "Stop checking switched-off mailboxes" \
+  --status "Ready to merge" --pr 6095 --waiting-on antonios --need "Does it ride 1.26.3?"
+```
+
+Only the fields you pass change. Every open PR of yours that no session has reported still shows up
+(from `gh search prs --author=@me`), so nothing slips; PRs untouched for 45 days are tucked away.
+Settings live in `~/.claude/hallway/deck.json`: `approvers` (e.g. `["antonios"]`) gets its own column of
+cards, `jira_url` links ticket keys, and `people` maps GitHub logins to names.
+
 ### On your phone, through Tailscale
 
 The deck only listens on your Mac. [Tailscale](https://tailscale.com) can share it with your own devices

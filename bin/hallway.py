@@ -97,6 +97,18 @@ CREATE TABLE IF NOT EXISTS status_log (
     text    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_status_log ON status_log(handle, at);
+CREATE TABLE IF NOT EXISTS ledger (
+    ticket      TEXT NOT NULL,   -- EE-4236, or a short label when there is no ticket
+    handle      TEXT NOT NULL,   -- the session that owns this row
+    title       TEXT,            -- what it is, a few words
+    summary     TEXT,            -- one or two lines
+    status      TEXT,            -- In progress | PR open | Needs review | Ready to merge | Merged | In Test | Blocked | On hold | Done
+    pr          TEXT,            -- 6102, or owner/repo#6102
+    waiting_on  TEXT,            -- you | a person's name | ci | release | nobody
+    need        TEXT,            -- the exact question or action, for whoever it waits on
+    updated     REAL,
+    PRIMARY KEY (ticket, handle)
+);
 CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
 CREATE INDEX IF NOT EXISTS idx_msg_recipient ON messages(recipient);
 CREATE INDEX IF NOT EXISTS idx_msg_channel ON messages(channel);
@@ -1599,6 +1611,7 @@ def cmd_deck(conn, args):
     import http.server
     here = os.path.dirname(os.path.abspath(__file__))
     page = os.path.join(here, "..", "web", "deck.html")
+    gh = _GitHub() if not os.environ.get("HALLWAY_NO_GITHUB") else None
     allowed = {u.strip().lower() for u in os.environ.get("HALLWAY_DECK_USERS", "").split(",") if u.strip()}
     if not allowed:
         allowed = _tailscale_owner()
@@ -1679,6 +1692,12 @@ def cmd_deck(conn, args):
                            '<circle cx="32" cy="32" r="18" fill="none" stroke="#5ef2ff" stroke-width="3"/>'
                            '<circle cx="32" cy="32" r="7" fill="#5ef2ff"/>'
                            '<circle cx="47" cy="20" r="4" fill="#ffb547"/></svg>', "image/svg+xml")
+            elif path == "/api/ledger":
+                c = connect()
+                try:
+                    self._send(200, json.dumps(ledger_state(c, gh)))
+                finally:
+                    c.close()
             elif path == "/api/deck":
                 c = connect()
                 try:
@@ -1835,6 +1854,224 @@ def cmd_wait(conn, args):
             pass
 
 
+# ------------------------------------------------------------------ ledger
+# One row per ticket a session is working on, kept current by the session itself at
+# every milestone, so the user can see where everything stands without opening each
+# session. The deck adds live pull request state from GitHub on top.
+
+LEDGER_FIELDS = ("title", "summary", "status", "pr", "waiting_on", "need")
+
+
+def cmd_ledger(conn, args):
+    ident = detect_identity(args.a_as)
+    handle = touch_agent(conn, ident)
+    if args.action == "set":
+        if not args.ticket:
+            raise SystemExit('Which ticket? e.g. `hallway ledger set EE-4236 --status "PR open" ...`')
+        ticket = args.ticket.strip()
+        row = conn.execute("SELECT * FROM ledger WHERE ticket=? AND handle=?", (ticket, handle)).fetchone()
+        vals = {f: (row[f] if row else None) for f in LEDGER_FIELDS}
+        for f in LEDGER_FIELDS:
+            v = getattr(args, f)
+            if v is not None:
+                vals[f] = _clean(v, 300) if f in ("summary", "need") else _clean(v, 120)
+        if args.done:
+            vals["status"], vals["waiting_on"], vals["need"] = "Done", "nobody", ""
+        if vals["waiting_on"]:
+            vals["waiting_on"] = vals["waiting_on"].strip().lower()
+        conn.execute("INSERT OR REPLACE INTO ledger (ticket, handle, title, summary, status, pr,"
+                     " waiting_on, need, updated) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (ticket, handle, vals["title"], vals["summary"], vals["status"], vals["pr"],
+                      vals["waiting_on"], vals["need"], now()))
+        conn.commit()
+        print("ledger: %s - %s%s" % (ticket, vals["status"] or "(no status)",
+                                     ", waiting on " + vals["waiting_on"] if vals["waiting_on"] else ""))
+        return
+    if args.action == "rm":
+        n = conn.execute("DELETE FROM ledger WHERE ticket=? AND handle=?", (args.ticket, handle)).rowcount
+        conn.commit()
+        print("removed" if n else "no such row for this session")
+        return
+    rows = conn.execute("SELECT l.*, a.title AS session FROM ledger l LEFT JOIN agents a ON a.handle=l.handle"
+                        " WHERE l.updated > ? ORDER BY l.updated DESC",
+                        (now() - 14 * 86400,)).fetchall()
+    if not args.all:
+        rows = [r for r in rows if r["handle"] == handle]
+    if args.json:
+        print(json.dumps([dict(r) for r in rows], indent=1))
+        return
+    if not rows:
+        print("No ledger rows%s. Add one: hallway ledger set <ticket> --title ... --status ... --waiting-on ..."
+              % ("" if args.all else " for this session"))
+        return
+    for r in rows:
+        print("%-14s %-15s %-10s %s%s" % (r["ticket"], (r["status"] or "")[:15],
+              (r["waiting_on"] or "")[:10], r["title"] or "", "  [%s]" % r["session"] if args.all else ""))
+
+
+TICKET_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d+\b")
+
+
+class _GitHub:
+    """Open pull requests by the user, refreshed in the background (no tokens, just `gh`)."""
+
+    def __init__(self, every=180):
+        import threading
+        self.every, self.prs, self.at, self.error = every, {}, 0, None
+        self.lock = threading.Lock()
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _gh(self, *a):
+        import subprocess
+        out = subprocess.run(["gh"] + list(a), capture_output=True, text=True, timeout=60)
+        if out.returncode:
+            raise RuntimeError((out.stderr or out.stdout).strip()[:200])
+        return json.loads(out.stdout or "null")
+
+    def _loop(self):
+        while True:
+            try:
+                self.refresh()
+                self.error = None
+            except Exception as e:
+                self.error = str(e)
+            time.sleep(self.every)
+
+    def refresh(self):
+        found = self._gh("search", "prs", "--author=@me", "--state=open", "--limit", "60",
+                         "--json", "number,title,url,repository,isDraft,updatedAt")
+        prs = {}
+        for p in found or []:
+            repo = p["repository"]["nameWithOwner"]
+            d = {"number": p["number"], "repo": repo, "title": p["title"], "url": p["url"],
+                 "draft": p["isDraft"], "updated": p["updatedAt"], "ci": "", "review": "",
+                 "reviewers": [], "branch": "", "mergeable": ""}
+            try:
+                v = self._gh("pr", "view", str(p["number"]), "-R", repo, "--json",
+                             "reviewDecision,reviewRequests,headRefName,mergeable,statusCheckRollup")
+                states = [(c.get("conclusion") or c.get("state") or "").upper()
+                          for c in (v.get("statusCheckRollup") or [])]
+                if any(x in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED") for x in states):
+                    d["ci"] = "failing"
+                elif any(x in ("", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED") for x in states):
+                    d["ci"] = "running"
+                elif states:
+                    d["ci"] = "green"
+                d["review"] = (v.get("reviewDecision") or "").lower()
+                d["reviewers"] = [r.get("login") or r.get("name") or "" for r in v.get("reviewRequests") or []]
+                d["branch"] = v.get("headRefName") or ""
+                d["mergeable"] = (v.get("mergeable") or "").lower()
+            except Exception:
+                pass
+            prs["%s#%s" % (repo, p["number"])] = d
+        with self.lock:
+            self.prs, self.at = prs, now()
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.prs), self.at, self.error
+
+
+def _checked_out(cwd):
+    """The branch checked out in a directory, including a git worktree (.git is a file)."""
+    if not cwd:
+        return None
+    try:
+        g = os.path.join(cwd, ".git")
+        if os.path.isfile(g):
+            g = open(g).read().split("gitdir:", 1)[1].strip()
+        head = open(os.path.join(g, "HEAD")).read().strip()
+        return head.split("refs/heads/", 1)[1] if "refs/heads/" in head else None
+    except Exception:
+        return None
+
+
+def ledger_state(conn, gh=None):
+    """Ledger rows from the sessions, joined with live PR state, plus open PRs nobody reported."""
+    t = now()
+    titles = session_titles()
+    live = live_handles(conn)
+    conf = _deck_conf()
+    approvers = [a.lower() for a in conf.get("approvers", [])]
+    jira = conf.get("jira_url", "")
+    prs, gh_at, gh_err = gh.snapshot() if gh else ({}, 0, "GitHub not checked")
+    # Which session owns a PR: the desktop app records each session's latest PR number,
+    # and a worktree's checked-out branch usually names the PR's branch.
+    by_branch, by_pr = {}, {}
+    for meta in titles.values():
+        if meta.get("archived"):
+            continue
+        if meta.get("pr"):
+            by_pr[str(meta["pr"])] = meta
+        for b in {meta.get("branch"), _checked_out(meta.get("cwd"))}:
+            if b:
+                by_branch[b] = meta
+    agents = {r["handle"]: r for r in conn.execute("SELECT handle, title, session_id FROM agents")}
+
+    def session_of(handle):
+        a = agents.get(handle)
+        meta = titles.get(a["session_id"] or "") if a else None
+        host = (meta or {}).get("host") or (live.get(handle) or {}).get("host")
+        return {"handle": handle, "title": (a and a["title"]) or (meta or {}).get("title") or handle,
+                "host": host, "live": handle in live}
+
+    def find_pr(ref):
+        if not ref:
+            return None
+        ref = str(ref).lstrip("#")
+        if ref in prs:
+            return prs[ref]
+        hits = [p for k, p in prs.items() if k.endswith("#" + ref)]
+        return hits[0] if len(hits) == 1 else None
+
+    rows, seen_prs = [], set()
+    for r in conn.execute("SELECT * FROM ledger WHERE updated > ? ORDER BY updated DESC", (t - 14 * 86400,)):
+        if (r["status"] or "").lower() == "done" and t - r["updated"] > 7 * 86400:
+            continue
+        pr = find_pr(r["pr"])
+        if pr:
+            seen_prs.add("%s#%s" % (pr["repo"], pr["number"]))
+        rows.append({"ticket": r["ticket"], "title": r["title"] or "", "summary": r["summary"] or "",
+                     "status": r["status"] or "", "pr": r["pr"] or "", "pr_live": pr,
+                     "waiting_on": (r["waiting_on"] or "").lower(), "need": r["need"] or "",
+                     "updated": r["updated"], "session": session_of(r["handle"]), "source": "session"})
+    # open PRs that no session has put on the ledger, so nothing slips
+    for key, pr in prs.items():
+        if key in seen_prs:
+            continue
+        meta = by_branch.get(pr["branch"]) or by_pr.get(str(pr["number"]))
+        tk = TICKET_RE.search(pr["title"] or "")
+        if pr["ci"] in ("running", "failing"):
+            waiting = "ci"
+        elif pr["review"] == "changes_requested":
+            waiting = "session"          # the author has to address the review
+        elif pr["review"] == "approved":
+            waiting = "you"              # approved: yours to merge or to schedule
+        else:
+            waiting = pr["reviewers"][0].lower() if pr["reviewers"] else "review"
+        status = ("CI failing" if pr["ci"] == "failing" else "Draft" if pr["draft"] else
+                  "Ready to merge" if pr["review"] == "approved" and pr["ci"] == "green" else
+                  "Changes requested" if pr["review"] == "changes_requested" else "PR open")
+        host = meta.get("host") if meta else None
+        handle = None
+        if host:
+            for h, a in agents.items():
+                m = titles.get(a["session_id"] or "")
+                if m and m.get("host") == host:
+                    handle = h
+                    break
+        rows.append({"ticket": tk.group(0) if tk else "PR %s" % pr["number"],
+                     "title": TICKET_RE.sub("", pr["title"]).lstrip(" :-") or pr["title"],
+                     "summary": "", "status": status, "pr": key, "pr_live": pr,
+                     "waiting_on": waiting, "need": "", "updated": 0,
+                     "session": session_of(handle) if handle else (
+                         {"handle": None, "title": meta.get("title"), "host": host, "live": False} if meta else None),
+                     "source": "github"})
+    return {"generated_at": t, "rows": rows, "approvers": approvers, "jira_url": jira,
+            "people": {k.lower(): v for k, v in (conf.get("people") or {}).items()},
+            "github_at": gh_at, "github_error": gh_err}
+
+
 def cmd_hook_start(conn, args):
     """Plugin SessionStart hook: install the shim, then print recent unread mail and the
     roster of other running sessions (stdout becomes the session's startup context)."""
@@ -1852,6 +2089,11 @@ def cmd_hook_start(conn, args):
     _install_shim()
     cmd_pending(conn, args)
     cmd_peers(conn, args)
+    print("\nKeep your user's Ledger current: when you start on a ticket and at each milestone (PR opened,"
+          " review requested, merged, deployed, waiting on someone, done), run one line:\n"
+          "  hallway ledger set <TICKET> --title \"few words\" --summary \"1-2 lines\" --status \"PR open\""
+          " --pr 6102 --waiting-on <you|name|ci|release|nobody> --need \"the exact question\"\n"
+          "Only the fields you pass change. It is how your user sees every ticket at a glance.")
 
 
 class _Parser(argparse.ArgumentParser):
@@ -1936,6 +2178,19 @@ def main():
     s.add_argument("--full", action="store_true", help="every update, not just the latest")
     s.add_argument("--json", action="store_true")
 
+
+    s = add("ledger", cmd_ledger, "your tickets and where each stands (shown on the deck)")
+    s.add_argument("action", nargs="?", default="list", choices=["list", "set", "rm"])
+    s.add_argument("ticket", nargs="?")
+    s.add_argument("--title")
+    s.add_argument("--summary")
+    s.add_argument("--status", help="In progress | PR open | Needs review | Ready to merge | Merged | In Test | Blocked | On hold | Done")
+    s.add_argument("--pr", help="6102 or owner/repo#6102")
+    s.add_argument("--waiting-on", dest="waiting_on", help="you | a person's name | ci | release | nobody")
+    s.add_argument("--need", help="the exact question or action for whoever it waits on")
+    s.add_argument("--done", action="store_true", help="mark it done")
+    s.add_argument("--all", action="store_true", help="every session's rows, not just yours")
+    s.add_argument("--json", action="store_true")
 
     s = add("deck", cmd_deck, "serve the live deck (localhost; see README for phones)")
     s.add_argument("--port", type=int, default=5055)

@@ -67,6 +67,17 @@ Messages that another session pushes into your chat start with a `[Hallway]` lin
 When you push a message into another session yourself, start it with the exact line `hallway notify`
 gives you (the "start it with" line). Never write a peer message so that it reads as if the user said it.
 
+## Keep your user's ledger current
+Your user reads the Ledger to see every ticket at a glance instead of opening each session. Whenever
+you start on a ticket and at each milestone (PR opened, review requested, approved, merged, deployed,
+In Test, blocked, waiting on someone, done), run one line:
+```bash
+hallway ledger set EE-4236 --title "few words" --summary "1-2 plain lines" --status "PR open" \
+  --pr 6095 --waiting-on <you|a person's name|ci|release|nobody> --need "the exact question for them"
+```
+Only the fields you pass change. Use `--waiting-on you` only for a decision that is genuinely your
+user's. When it is finished: `hallway ledger set EE-4236 --done`.
+
 ## Messages from the deck
 Your user can write to you from the Hallway deck (on their Mac or phone). A background hook wakes you
 with it, starting `[Hallway] From your user:`. Treat it exactly like a message typed in this chat.

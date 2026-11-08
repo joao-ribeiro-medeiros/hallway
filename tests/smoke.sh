@@ -39,10 +39,14 @@ stop $SB "$T/work/payments" "Still waiting for QA." "env X=1"
 ok "a status the session set itself is kept"  'C $SA peers | grep "s-bbbbbbbb" | grep -q "blocked: waiting on the QA deploy"'
 stop $SA "$T/work/checkout" "Opened the pull request." "env HALLWAY_NO_TURN_STATUS=1"
 ok "HALLWAY_NO_TURN_STATUS=1 records nothing" '! C $SB day --full | grep -q "Opened the pull request"'
+C $SA ledger set EE-1234 --title "Promo field" --status "PR open" --pr 42 --waiting-on Antonios --need "OK for the release?" >/dev/null
+C $SA ledger set EE-1234 --summary "Moves the promo field above the totals." >/dev/null
+ok "a ledger update only changes the fields given" 'C $SA ledger --json | grep -q "OK for the release?" && C $SA ledger --json | grep -q "Moves the promo field"'
 PORT=$((20000 + RANDOM % 20000))
-run python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!
+run env HALLWAY_NO_GITHUB=1 python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!
 for i in $(seq 1 30); do curl -s -o /dev/null "http://127.0.0.1:$PORT/api/deck" && break; sleep .2; done
 ok "deck serves the live state"               'curl -s "http://127.0.0.1:$PORT/api/deck" | grep -q "Should I open the pull request"'
+ok "the deck serves the ledger"               'curl -s "http://127.0.0.1:$PORT/api/ledger" | grep -q "\"waiting_on\": \"antonios\""'
 ok "deck refuses another Tailscale user"      '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Tailscale-User-Login: someone@else.com" "http://127.0.0.1:$PORT/api/deck")" = 403 ]'
 ok "a reply from the deck is stored"          'curl -s -X POST -H "Content-Type: application/json" -d "{\"handle\":\"s-aaaaaaaa\",\"text\":\"Yes, open it.\"}" "http://127.0.0.1:$PORT/api/reply" | grep -q "\"id\""'
 BAD='{"handle":"s-aaaaaaaa","text":"injected"}'
