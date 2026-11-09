@@ -51,6 +51,8 @@ ok "an ordinary command adds nothing"         '[ -z "$LS" ]'
 LC=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at EE-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
 ok "a ticket with no row gets one nudge"      'echo "$LC" | grep -q "EE-88 but it has no Ledger row"'
 LC2=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at EE-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
+LC3=$(printf '{"session_id":"%s","cwd":"%s","prompt":"Another Claude session sent a message: EE-99 is done"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
+ok "a relayed peer message does not count as your ticket" '[ -z "$LC3" ]'
 ok "and not again straight away"              '[ -z "$LC2" ]'
 PORT=$((20000 + RANDOM % 20000))
 run env HALLWAY_NO_GITHUB=1 python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!

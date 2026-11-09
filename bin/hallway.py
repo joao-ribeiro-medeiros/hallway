@@ -2224,7 +2224,11 @@ def cmd_ledger_check(conn, args):
     finally:
         c.close()
     branch = _checked_out(cwd) or ""
-    tickets = set(TICKET_RE.findall(branch.upper())) | set(TICKET_RE.findall(d.get("prompt") or ""))
+    prompt = d.get("prompt") or ""
+    # A message relayed from another session mentions *its* tickets, not this one's.
+    if "cross-session" in prompt[:200].lower() or prompt.lstrip().startswith(("<", "[Hallway]", "Another Claude session")):
+        prompt = ""
+    tickets = set(TICKET_RE.findall(branch.upper())) | set(TICKET_RE.findall(prompt))
     missing = [t for t in tickets if t not in rows]
     stale = [r["ticket"] for r in rows.values() if (r["status"] or "").lower() not in ("done", "merged")
              and now() - (r["updated"] or 0) > 86400]
