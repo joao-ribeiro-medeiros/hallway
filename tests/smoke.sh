@@ -64,6 +64,9 @@ ok "a reply from the deck is stored"          'curl -s -X POST -H "Content-Type:
 BAD='{"handle":"s-aaaaaaaa","text":"injected"}'
 code(){ curl -s -o /dev/null -w "%{http_code}" "$@"; }
 ok "a cross-site form post is refused"        '[ "$(code -X POST -H "Content-Type: text/plain" -H "Origin: https://evil.example" -d "$BAD" "http://127.0.0.1:$PORT/api/reply")" = 403 ]'
+ACK='{"ticket":"EE-1234","until":1}'
+ok "a Jira row can be marked done"            '[ "$(code -X POST -H "Content-Type: application/json" -H "Origin: http://127.0.0.1:$PORT" -d "$ACK" "http://127.0.0.1:$PORT/api/ack")" = 200 ]'
+ok "marking done refuses a cross-site post"   '[ "$(code -X POST -H "Content-Type: text/plain" -H "Origin: https://evil.example" -d "$ACK" "http://127.0.0.1:$PORT/api/ack")" = 403 ]'
 ok "a rebound host name is refused"           '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Host: evil.example" "http://127.0.0.1:$PORT/api/deck")" = 403 ]'
 kill $PD 2>/dev/null; wait $PD 2>/dev/null
 ok "the relay hands the reply to the running session" 'C $SB relay --timeout 5 | grep -q "\[Hallway\] From your user: Yes, open it."'

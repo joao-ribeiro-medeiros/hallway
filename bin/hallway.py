@@ -97,6 +97,11 @@ CREATE TABLE IF NOT EXISTS status_log (
     text    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_status_log ON status_log(handle, at);
+CREATE TABLE IF NOT EXISTS acks (
+    ticket   TEXT PRIMARY KEY,
+    until_at REAL,          -- Jira comments at or before this time are handled
+    at       REAL
+);
 CREATE TABLE IF NOT EXISTS ledger (
     ticket      TEXT NOT NULL,   -- EE-4236, or a short label when there is no ticket
     handle      TEXT NOT NULL,   -- the session that owns this row
@@ -1720,10 +1725,31 @@ def cmd_deck(conn, args):
         def do_POST(self):
             if not self._allowed():
                 return
-            if self.path.split("?")[0] != "/api/reply":
+            path = self.path.split("?")[0]
+            if path not in ("/api/reply", "/api/ack"):
                 return self._send(404, "not found", "text/plain")
             if not self._same_origin():
                 return self._send(403, json.dumps({"error": "cross-site request refused"}))
+            if path == "/api/ack":
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    data = json.loads(self.rfile.read(n) or b"{}")
+                    ticket = (data.get("ticket") or "").strip()[:40]
+                    if not TICKET_RE.fullmatch(ticket):
+                        return self._send(400, json.dumps({"error": "not a ticket key"}))
+                    c = connect()
+                    try:
+                        if data.get("undo"):
+                            c.execute("DELETE FROM acks WHERE ticket=?", (ticket,))
+                        else:
+                            c.execute("INSERT OR REPLACE INTO acks (ticket, until_at, at) VALUES (?,?,?)",
+                                      (ticket, float(data.get("until") or now()), now()))
+                        c.commit()
+                    finally:
+                        c.close()
+                    return self._send(200, json.dumps({"ok": True}))
+                except Exception as e:
+                    return self._send(500, json.dumps({"error": str(e)}))
             try:
                 n = int(self.headers.get("Content-Length", 0))
                 data = json.loads(self.rfile.read(n) or b"{}")
@@ -2206,6 +2232,7 @@ def ledger_state(conn, gh=None, jira=None):
                          {"handle": None, "title": meta.get("title"), "host": host, "live": False} if meta else None),
                      "source": "github"})
     issues, jira_at, jira_err = jira.snapshot() if jira else ({}, 0, None)
+    acked = {r["ticket"]: r["until_at"] for r in conn.execute("SELECT ticket, until_at FROM acks")}
     by_ticket = {}
     for r in rows:
         by_ticket.setdefault(r["ticket"], []).append(r)
@@ -2214,15 +2241,15 @@ def ledger_state(conn, gh=None, jira=None):
         if key in by_ticket:
             for r in by_ticket[key]:
                 r["jira"] = ji
-                if lc and lc["for_me"] and lc["at"] > (r.get("updated") or 0):
+                if lc and lc["for_me"] and lc["at"] > (r.get("updated") or 0) and lc["at"] > acked.get(key, 0):
                     r["jira_alert"] = "New Jira comment from %s, after this row was last updated" % lc["author"]
             continue
-        if lc and lc["for_me"] and t - lc["at"] < 7 * 86400:
+        if lc and lc["for_me"] and t - lc["at"] < 7 * 86400 and lc["at"] > acked.get(key, 0):
             rows.append({"ticket": key, "title": ji["summary"], "summary": "", "status": ji["status"],
                          "pr": "", "pr_live": None, "waiting_on": "you",
                          "need": "Reply to %s's comment on Jira: %s" % (lc["author"], lc["excerpt"]),
                          "updated": lc["at"], "session": None, "source": "jira", "jira": ji})
-        elif ji["assigned"] and ji["status"].lower() not in ("done", "closed"):
+        elif ji["assigned"] and ji["status"].lower() not in ("done", "closed") and key not in acked:
             rows.append({"ticket": key, "title": ji["summary"], "summary": "", "status": ji["status"],
                          "pr": "", "pr_live": None, "waiting_on": "nobody",
                          "need": "Assigned to you and in progress in Jira; no session is working on it",

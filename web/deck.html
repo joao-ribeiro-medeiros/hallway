@@ -226,6 +226,8 @@ button,textarea{font:inherit;color:inherit}
 .lsince{font:500 12px var(--mono);color:var(--dim);white-space:nowrap}
 .lout{display:block;margin-top:6px;font:600 9.5px var(--mono);letter-spacing:.08em;color:var(--red)}
 .lsince.old{color:var(--amber)}
+.lack{all:unset;cursor:pointer;margin-left:10px;width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;border:1px solid var(--line2);color:var(--green);font-size:13px;vertical-align:middle}
+.lack:hover{background:rgba(98,255,168,.12);border-color:var(--green)}
 .ldet td{padding:0 14px 16px;border-bottom:1px solid rgba(94,242,255,.07);background:rgba(94,242,255,.06)}
 .ldetbox{display:grid;grid-template-columns:2fr 1fr;gap:18px;padding:14px 16px;border:1px solid var(--line);border-radius:8px;background:#08121b}
 .ldetbox h4{margin:0 0 8px;font:600 10px var(--mono);letter-spacing:.16em;color:var(--dim)}
@@ -834,8 +836,9 @@ function renderLedger() {
         <td class="lsum"><b>${esc(r.title || r.ticket)}</b>${r.summary ? `<span>${esc(short(r.summary, 200))}</span>` : ""}</td>
         <td><span class="lst" style="--sc:${STCOL(r.status)}">${esc((r.status || "—").toUpperCase())}</span>${r.outdated ? `<span class="lout" title="${esc(r.outdated)}">⚠ ROW OUTDATED</span>` : ""}${r.jira_alert ? `<span class="lout" style="color:var(--amber)" title="${esc(r.jira_alert)}">💬 NEW JIRA COMMENT</span>` : ""}</td>
         <td class="lpr">${prCell(r)}</td><td>${whoCell(r)}</td>
-        <td class="lsince${old ? " old" : ""}">${ts ? ago(ts) : ""}</td>`;
+        <td class="lsince${old ? " old" : ""}">${ts ? ago(ts) : ""}${(r.source === "jira" || r.jira_alert) ? `<button class="lack" title="Done: hide until someone comments again">✓</button>` : ""}</td>`;
       tr.onclick = () => { lOpen = lOpen === id ? null : id; renderLedger(); };
+      const qa = tr.querySelector(".lack"); if (qa) qa.onclick = e => { e.stopPropagation(); ackTicket(r); };
       body.appendChild(tr);
       if (lOpen === id) {
         const sess = r.session, jira = L.jira_url && ticketish(r.ticket) ? L.jira_url + r.ticket : "";
@@ -850,7 +853,10 @@ function renderLedger() {
           <div class="lacts">${sess && sess.host && !document.body.classList.contains("phone") ? `<a class="fb p" href="claude://claude.ai/epitaxy/${esc(sess.host)}">Open the session</a>` : ""}
             ${sess && sess.handle ? `<button class="fb" data-msg>Message the session</button>` : ""}
             ${(r.jira && r.jira.url) || jira ? `<a class="fb" target="_blank" href="${esc((r.jira && r.jira.url) || jira)}">Open ${esc(r.ticket)} in Jira</a>` : ""}
-            ${r.pr_live ? `<a class="fb" target="_blank" href="${esc(r.pr_live.url)}">Open PR #${r.pr_live.number}</a>` : ""}</div></div></td>`;
+            ${r.pr_live ? `<a class="fb" target="_blank" href="${esc(r.pr_live.url)}">Open PR #${r.pr_live.number}</a>` : ""}
+            ${(r.source === "jira" || r.jira_alert) ? `<button class="fb p" data-ack>Done, I've handled it</button>` : ""}</div></div></td>`;
+        const ab = tr2.querySelector("[data-ack]");
+        if (ab) ab.onclick = e => { e.stopPropagation(); ackTicket(r); };
         const mb = tr2.querySelector("[data-msg]");
         if (mb) mb.onclick = e => { e.stopPropagation(); const s = (S && S.sessions.find(x => x.handle === sess.handle)) ||
           {handle:sess.handle, title:sess.title, state:"idle", group:"", said:"", prompt:"", live:sess.live}; compose(s); };
@@ -862,6 +868,17 @@ function renderLedger() {
   const jr = L.jira_error ? ` Jira: ${esc(L.jira_error)}.` : L.jira_at ? ` Jira checked ${ago(L.jira_at)} ago.` : "";
   $("#lfoot").innerHTML = `${rows.filter(r => r.source === "session").length} rows from sessions, ${rows.filter(r => r.source === "github").length} open PRs and ${rows.filter(r => r.source === "jira").length} Jira tickets no session has reported. ${gh}.${jr}`;
 }
+async function ackTicket(r) {
+  const until = (r.jira && r.jira.last_comment && r.jira.last_comment.at) || Date.now() / 1000;
+  try {
+    const res = await fetch("/api/ack", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ticket:r.ticket, until})});
+    if (!res.ok) throw 0;
+    L.rows = L.rows.filter(x => !(x.ticket === r.ticket && x.source === "jira")).map(x => x.ticket === r.ticket ? {...x, jira_alert:""} : x);
+    renderLedger(); toast(`${r.ticket} cleared. It comes back if someone comments again.`);
+    lastAck = r.ticket;
+  } catch (e) { toast("Couldn't clear it. Try again."); }
+}
+let lastAck = null;
 function toast(t) { const e = $("#ltoast"); e.textContent = t; e.style.display = "block"; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = "none", 2600); }
 $("#lq").oninput = e => { lQ = e.target.value; renderLedger(); };
 $("#lDone").onclick = () => { lShowDone = !lShowDone; renderLedger(); };
