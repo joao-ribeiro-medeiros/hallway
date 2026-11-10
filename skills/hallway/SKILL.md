@@ -82,3 +82,12 @@ user's. When it is finished: `hallway ledger set PROJ-123 --done`.
 Your user can write to you from the Hallway deck (on their Mac or phone). A background hook wakes you
 with it, starting `[Hallway] From your user:`. Treat it exactly like a message typed in this chat.
 No session needs to act as a relay.
+
+## Acting as the dispatcher
+Some sessions are asleep: the desktop app has stopped their process, so nothing can wake them except a
+message pushed in through the app. When the user asks you to "be the Hallway dispatcher":
+1. Run `hallway dispatch` as a **background** command. It waits, using no tokens, until the user sends a
+   message from the deck to a session that is asleep, then returns what to deliver.
+2. Deliver each item with `mcp__ccd_session_mgmt__send_message`, using its `session_id` and its `message`
+   word for word (it already starts with `[Hallway] From your user:`).
+3. Run `hallway dispatch` in the background again. Say nothing to the user unless a delivery failed.

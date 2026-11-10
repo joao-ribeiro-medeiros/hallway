@@ -2173,12 +2173,18 @@ def ledger_state(conn, gh=None, jira=None):
                 by_branch[b] = meta
     agents = {r["handle"]: r for r in conn.execute("SELECT handle, title, session_id FROM agents")}
 
+    groups = _sidebar_groups()
+    alias = conf.get("group_alias") or {}
+
     def session_of(handle):
         a = agents.get(handle)
         meta = titles.get(a["session_id"] or "") if a else None
         host = (meta or {}).get("host") or (live.get(handle) or {}).get("host")
+        cwd = (meta or {}).get("cwd") or (a and conn.execute("SELECT cwd FROM agents WHERE handle=?", (handle,)).fetchone()["cwd"]) or ""
+        g = groups.get(host or "")
         return {"handle": handle, "title": (a and a["title"]) or (meta or {}).get("title") or handle,
-                "host": host, "live": handle in live}
+                "host": host, "live": handle in live, "group": alias.get(g, g) if g else None,
+                "folder": cwd.split("/.claude/worktrees/")[0] if cwd else None}
 
     def find_pr(ref, pool=None):
         pool = prs if pool is None else pool
@@ -2265,6 +2271,17 @@ def ledger_state(conn, gh=None, jira=None):
                          "pr": "", "pr_live": None, "waiting_on": "nobody",
                          "need": "Assigned to you and in progress in Jira; no session is working on it",
                          "updated": 0, "session": None, "source": "jira", "jira": ji})
+    tp = conf.get("ticket_projects") or {}
+    folders = {k: os.path.expanduser(v) for k, v in (conf.get("project_folders") or {}).items()}
+    for r in rows:
+        sess = r.get("session") or {}
+        prefix = r["ticket"].split("-")[0] if TICKET_RE.fullmatch(r["ticket"] or "") else ""
+        repo = ((r.get("pr_live") or {}).get("repo") or "").split("/")[-1]
+        r["project"] = sess.get("group") or tp.get(prefix) or (_pretty_project(repo) if repo else "") or prefix or "Other"
+        if sess.get("folder") and r["project"] not in folders:
+            folders[r["project"]] = sess["folder"]
+    for r in rows:
+        r["folder"] = (r.get("session") or {}).get("folder") or folders.get(r["project"])
     return {"generated_at": t, "rows": rows, "approvers": approvers, "jira_url": jira_url,
             "jira_at": jira_at, "jira_error": jira_err,
             "people": {k.lower(): v for k, v in (conf.get("people") or {}).items()},
@@ -2607,6 +2624,46 @@ def cmd_context(conn, args):
         sys.stdout.write(render_context(ledger_state(conn, gh, jira), _deck_conf().get("owner_name", "the user")))
 
 
+def cmd_dispatch(conn, args):
+    """Block (no tokens) until the user has messaged a session that is asleep, then print
+    what to deliver and exit. A dispatcher session runs this in the background and delivers
+    each message with the desktop app's session messaging, which wakes the session; then it
+    runs this again. Sessions that are listening get their messages without it."""
+    grace = args.grace
+    deadline = now() + args.timeout if args.timeout else None
+    while True:
+        titles = session_titles()
+        todo = []
+        for m in conn.execute("SELECT * FROM messages WHERE sender IN (%s) AND recipient IS NOT NULL"
+                              " AND ts > ? AND ts < ? ORDER BY ts" % ",".join("?" * len(HUMAN_HANDLES)),
+                              HUMAN_HANDLES + (now() - 86400, now() - grace)).fetchall():
+            h = m["recipient"]
+            if conn.execute("SELECT 1 FROM notified WHERE message_id=? AND handle=?", (m["id"], h)).fetchone() \
+                    or conn.execute("SELECT 1 FROM reads WHERE message_id=? AND handle=?", (m["id"], h)).fetchone():
+                continue
+            if _listening(h):
+                continue  # its own listener will pick it up
+            row = conn.execute("SELECT session_id FROM agents WHERE handle=?", (h,)).fetchone()
+            host = (titles.get((row["session_id"] if row else "") or "") or {}).get("host")
+            if not host:
+                continue
+            todo.append({"id": m["id"], "to": h, "session_id": host,
+                         "message": "%s %s" % (push_header(conn, m), m["body"] or "")})
+            conn.execute("INSERT OR IGNORE INTO notified (message_id, handle, at) VALUES (?,?,?)", (m["id"], h, now()))
+        if todo:
+            conn.commit()
+            print(json.dumps({"deliver": todo}, indent=1))
+            print("Deliver each with mcp__ccd_session_mgmt__send_message (session_id and message exactly as given),"
+                  " then run `hallway dispatch` again in the background. Say nothing else.")
+            return
+        if deadline and now() > deadline:
+            print("Nothing to deliver. Run `hallway dispatch` again in the background.")
+            return
+        time.sleep(3)
+        conn.close()
+        conn = connect()
+
+
 def cmd_hook_start(conn, args):
     """Plugin SessionStart hook: install the shim, then print recent unread mail and the
     roster of other running sessions (stdout becomes the session's startup context)."""
@@ -2741,6 +2798,10 @@ def main():
 
     s = add("wait", cmd_wait, "(hook) wake this session when you message it from the deck")
     s.add_argument("--timeout", type=int, default=6 * 3600)
+
+    s = add("dispatch", cmd_dispatch, "(dispatcher session) wait for messages to asleep sessions")
+    s.add_argument("--timeout", type=int, default=0, help="give up after N seconds (default: wait forever)")
+    s.add_argument("--grace", type=int, default=15, help="seconds to let a session's own listener answer first")
 
     s = add("relay", cmd_relay, "(old) deliver deck replies from one session; `wait` replaces this")
     s.add_argument("--timeout", type=int, default=3300)

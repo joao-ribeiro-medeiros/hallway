@@ -135,6 +135,11 @@ starts waiting for your messages to it. It reads the local board every two secon
 When you send something, it wakes that session with your message, marked `[Hallway] From your user:`,
 using Claude Code's `asyncRewake` hook option. A session that is not running reads it when it next starts.
 
+The desktop app stops idle sessions' processes, and a stopped session has no listener. For those, one
+session can act as the **dispatcher**: ask it to "be the Hallway dispatcher". It runs `hallway dispatch`
+in the background, which waits without using tokens until you message a session that is asleep, then
+pushes your message in through the app's session messaging, which wakes that session.
+
 Messages from other agents never wake a session unless they are marked urgent (`hallway send --urgent`),
 so two agents cannot keep waking each other up.
 

@@ -105,5 +105,6 @@ print(before, seen(J(t0)), seen(J(t0)), seen(J(time.time())))
 PY
 )
 ok "after Done, the same comment never brings it back" '[ "$DONE" = "True False False True" ]'
+ok "dispatch returns nothing when no session is waiting on a message" 'C $SB dispatch --timeout 2 --grace 0 | grep -q "Nothing to deliver"'
 ok "all data stays inside the test HOME"      '[ -f "$T/.claude/hallway/hallway.db" ]'
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]
