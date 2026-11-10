@@ -1596,6 +1596,7 @@ def deck_state(conn):
     midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
     today = conn.execute("SELECT COUNT(*) FROM messages WHERE ts >= ?", (midnight,)).fetchone()[0]
     return {"generated_at": t, "sessions": sessions, "messages": msgs, "names": names,
+            "dispatcher": dispatcher_status(),
             "known": sorted(known), "activity": bins, "messages_today": today,
             "hour": lt.tm_hour, "human": HUMAN}
 
@@ -1795,6 +1796,10 @@ def cmd_deck(conn, args):
                         c.close()
                 time.sleep(int(_deck_conf().get("context_every", 600)))
         threading.Thread(target=_publisher, daemon=True).start()
+
+    if not os.environ.get("HALLWAY_NO_WATCHDOG"):
+        import threading
+        threading.Thread(target=_dispatcher_watchdog, daemon=True).start()
 
     srv = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     print("Hallway deck on http://%s:%d  (Ctrl+C to stop)" % (args.host, args.port))
@@ -2631,7 +2636,21 @@ def cmd_dispatch(conn, args):
     runs this again. Sessions that are listening get their messages without it."""
     grace = args.grace
     deadline = now() + args.timeout if args.timeout else None
+    beat_path = os.path.join(ROOT, "dispatcher.json")
+
+    def beat(**extra):
+        rec = {"pid": os.getpid(), "handle": detect_identity(args.a_as)["handle"],
+               "host": os.environ.get("CLAUDE_CODE_HOST_SESSION_ID"), "beat": now()}
+        rec.update(extra)
+        try:
+            tmp = beat_path + ".tmp"
+            json.dump(rec, open(tmp, "w"))
+            os.replace(tmp, beat_path)
+        except OSError:
+            pass
+    beat(started=now())
     while True:
+        beat()
         titles = session_titles()
         todo = []
         for m in conn.execute("SELECT * FROM messages WHERE sender IN (%s) AND recipient IS NOT NULL"
@@ -2652,6 +2671,7 @@ def cmd_dispatch(conn, args):
             conn.execute("INSERT OR IGNORE INTO notified (message_id, handle, at) VALUES (?,?,?)", (m["id"], h, now()))
         if todo:
             conn.commit()
+            beat(exited=now())
             print(json.dumps({"deliver": todo}, indent=1))
             print("Deliver each with mcp__ccd_session_mgmt__send_message (session_id and message exactly as given),"
                   " then run `hallway dispatch` again in the background. Say nothing else.")
@@ -2662,6 +2682,47 @@ def cmd_dispatch(conn, args):
         time.sleep(3)
         conn.close()
         conn = connect()
+
+
+def dispatcher_status():
+    """'listening', 'asleep' (it stopped and was not restarted), or 'none' (never set up)."""
+    try:
+        rec = json.load(open(os.path.join(ROOT, "dispatcher.json")))
+    except Exception:
+        return {"state": "none"}
+    alive = _pid_alive(int(rec.get("pid") or 0))
+    # Between deliveries the dispatcher exits and its session restarts it within seconds.
+    recent_exit = rec.get("exited") and now() - rec["exited"] < 180
+    state = "listening" if alive else ("restarting" if recent_exit else "asleep")
+    return {"state": state, "host": rec.get("host"), "since": rec.get("exited") or rec.get("beat")}
+
+
+def _notify(title, text, url=None):
+    import shutil, subprocess
+    try:
+        if shutil.which("terminal-notifier"):
+            cmd = ["terminal-notifier", "-title", title, "-message", text, "-group", "hallway-dispatcher"]
+            if url:
+                cmd += ["-open", url]
+            subprocess.run(cmd, timeout=10)
+        elif sys.platform == "darwin":
+            subprocess.run(["osascript", "-e", "display notification %s with title %s"
+                            % (json.dumps(text), json.dumps(title))], timeout=10)
+    except Exception:
+        pass
+
+
+def _dispatcher_watchdog():
+    """Tell the user, at most every 30 minutes, when the dispatcher has gone to sleep."""
+    last = 0
+    while True:
+        time.sleep(60)
+        st = dispatcher_status()
+        if st["state"] == "asleep" and now() - last > 1800:
+            last = now()
+            url = "claude://code/continue?session=%s" % st["host"] if st.get("host") else None
+            _notify("Hallway dispatcher is asleep",
+                    "Messages to sleeping sessions won't be delivered. Open the dispatcher session and send it 'resume'.", url)
 
 
 def cmd_hook_start(conn, args):

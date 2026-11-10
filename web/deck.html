@@ -276,6 +276,7 @@ body.phone .top{display:none}
     <div class="chip am" id="cWait"></div>
     <div class="chip rd" id="cBlock"></div>
     <div class="chip" id="cMsgs"></div>
+    <a class="chip rd" id="cDisp" hidden></a>
   </div>
   <div class="tabs"><a href="#deck">DECK</a><a href="#ledger">LEDGER</a><a href="#wall">WALL</a><a href="#focus">FOCUS</a><a href="#glance">PHONE</a></div>
   <div class="clock" id="clock"></div>
@@ -404,7 +405,9 @@ function replyStatus(handle) {
   if (m && m.delivered) return "✓ DELIVERED TO THE SESSION";
   const s = S.sessions.find(x => x.handle === handle);
   return s && s.listening ? "✓ SENT · IT REACHES THE SESSION IN A FEW SECONDS"
-    : "✓ SAVED · THE SESSION IS ASLEEP. IT GETS THIS AS SOON AS IT WAKES; OPEN IT ON YOUR MAC TO WAKE IT NOW";
+    : (S.dispatcher && ["listening", "restarting"].includes(S.dispatcher.state)
+       ? "✓ SENT · THE SESSION IS ASLEEP; THE DISPATCHER IS WAKING IT"
+       : "✓ SAVED · THE SESSION IS ASLEEP AND THE DISPATCHER IS OFF. IT GETS THIS WHEN IT NEXT WAKES");
 }
 
 /* ------------------------------------------------------- needs-you card */
@@ -440,7 +443,8 @@ function compose(s) {
   $("#cmT").textContent = s.title;
   $("#cmD").textContent = s.state === "wait" ? question(s.said) : (s.said || s.prompt || "");
   $("#cmNote").textContent = s.listening ? "LISTENING · IT WAKES UP WITH THIS, AS IF YOU TYPED IT"
-    : "ASLEEP · IT GETS THIS AS SOON AS IT WAKES (OPEN IT ON YOUR MAC TO WAKE IT NOW)";
+    : (S.dispatcher && ["listening", "restarting"].includes(S.dispatcher.state)
+       ? "ASLEEP · THE DISPATCHER WILL WAKE IT WITH THIS" : "ASLEEP · IT GETS THIS WHEN IT NEXT WAKES (DISPATCHER IS OFF)");
   $("#cmNote").style.color = ""; $("#cmText").value = drafts[s.handle] || "";
   $("#compose").classList.add("on"); setTimeout(() => $("#cmText").focus(), 50);
 }
@@ -467,6 +471,10 @@ function render() {
   $("#cWait").classList.toggle("zero", !nw);
   $("#cBlock").textContent = nb + " BLOCKED"; $("#cBlock").classList.toggle("zero", !nb);
   $("#cMsgs").textContent = S.messages_today + " MESSAGES TODAY";
+  const dp = S.dispatcher || {state:"none"}, dc = $("#cDisp");
+  dc.hidden = dp.state !== "asleep";
+  if (dp.state === "asleep") { dc.textContent = "⚠ DISPATCHER ASLEEP · OPEN IT AND SEND 'RESUME'";
+    dc.href = dp.host ? "claude://code/continue?session=" + dp.host : "#"; dc.style.textDecoration = "none"; }
   if (VIEW === "deck") renderDeck(att);
   if (VIEW === "wall") renderWall();
   if (VIEW === "focus") renderFocus(att);
@@ -884,7 +892,8 @@ function renderLedger() {
         const sel = tr2.querySelector("[data-to]"), ta = tr2.querySelector("[data-text]"), note = tr2.querySelector("[data-note]");
         tr2.querySelectorAll("select,textarea").forEach(x => x.onclick = e => e.stopPropagation());
         const showListen = () => { const s = S && S.sessions.find(x => x.handle === sel.value);
-          note.textContent = !sel.value ? "" : s && s.listening ? "LISTENING · IT STARTS RIGHT AWAY" : "ASLEEP · IT GETS THIS WHEN IT WAKES"; };
+          const dOn = S && S.dispatcher && ["listening", "restarting"].includes(S.dispatcher.state);
+          note.textContent = !sel.value ? "" : s && s.listening ? "LISTENING · IT STARTS RIGHT AWAY" : dOn ? "ASLEEP · THE DISPATCHER WILL WAKE IT" : "ASLEEP · IT GETS THIS WHEN IT NEXT WAKES"; };
         sel.onchange = showListen; showListen();
         tr2.querySelector("[data-send]").onclick = async e => { e.stopPropagation(); if (!sel.value) return note.textContent = "PICK A SESSION FIRST";
           note.textContent = "SENDING…";

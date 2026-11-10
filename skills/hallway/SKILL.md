@@ -91,3 +91,4 @@ message pushed in through the app. When the user asks you to "be the Hallway dis
 2. Deliver each item with `mcp__ccd_session_mgmt__send_message`, using its `session_id` and its `message`
    word for word (it already starts with `[Hallway] From your user:`).
 3. Run `hallway dispatch` in the background again. Say nothing to the user unless a delivery failed.
+4. If the user sends you "resume", the dispatcher had gone to sleep: just start step 1 again.
