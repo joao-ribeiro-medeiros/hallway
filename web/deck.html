@@ -389,7 +389,10 @@ function attention() { return [...sessionsBy("wait"), ...sessionsBy("block")].so
 function replyStatus(handle) {
   const mid = sent[handle]; if (!mid) return "";
   const m = S.messages.find(x => x.id === mid);
-  return m && m.delivered ? "✓ DELIVERED TO THE SESSION" : "✓ SENT · IT REACHES THE SESSION IN A FEW SECONDS";
+  if (m && m.delivered) return "✓ DELIVERED TO THE SESSION";
+  const s = S.sessions.find(x => x.handle === handle);
+  return s && s.listening ? "✓ SENT · IT REACHES THE SESSION IN A FEW SECONDS"
+    : "✓ SAVED · THE SESSION IS ASLEEP. IT GETS THIS AS SOON AS IT WAKES; OPEN IT ON YOUR MAC TO WAKE IT NOW";
 }
 
 /* ------------------------------------------------------- needs-you card */
@@ -424,7 +427,8 @@ function compose(s) {
   $("#cmK").style.color = COL[s.state];
   $("#cmT").textContent = s.title;
   $("#cmD").textContent = s.state === "wait" ? question(s.said) : (s.said || s.prompt || "");
-  $("#cmNote").textContent = s.live ? "IT WAKES UP WITH THIS, AS IF YOU TYPED IT" : "NOT RUNNING · IT READS THIS WHEN IT NEXT STARTS";
+  $("#cmNote").textContent = s.listening ? "LISTENING · IT WAKES UP WITH THIS, AS IF YOU TYPED IT"
+    : "ASLEEP · IT GETS THIS AS SOON AS IT WAKES (OPEN IT ON YOUR MAC TO WAKE IT NOW)";
   $("#cmNote").style.color = ""; $("#cmText").value = drafts[s.handle] || "";
   $("#compose").classList.add("on"); setTimeout(() => $("#cmText").focus(), 50);
 }

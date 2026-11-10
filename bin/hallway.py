@@ -1496,6 +1496,14 @@ def _human_text(text, cap=300):
     return _clean(text, cap)
 
 
+def _listening(handle):
+    """True if this session has a live waiter, so a message to it wakes it now."""
+    try:
+        return _pid_alive(int(open(os.path.join(ROOT, "waiters", handle + ".pid")).read().strip()))
+    except Exception:
+        return False
+
+
 def deck_state(conn):
     t = now()
     titles = session_titles()
@@ -1539,7 +1547,7 @@ def deck_state(conn):
         sessions.append({
             "handle": h, "host": host, "title": r["title"] or meta.get("title") or meta.get("branch") or "Untitled session",
             "group": group, "branch": meta.get("branch") or r["branch"], "pr": meta.get("pr"),
-            "pr_state": meta.get("pr_state"), "live": is_live, "state": state, "said": said,
+            "pr_state": meta.get("pr_state"), "live": is_live, "listening": _listening(h), "state": state, "said": said,
             "since": since, "active": active, "prompt": _human_text(r["last_prompt"]),
             "updates": [{"at": u["at"], "kind": u["kind"], "text": u["text"]} for u in log[-4:]],
         })
@@ -1727,7 +1735,7 @@ def cmd_deck(conn, args):
                     c.close()
                 if not mid:
                     return self._send(404, json.dumps({"error": "no such session"}))
-                self._send(200, json.dumps({"id": mid}))
+                self._send(200, json.dumps({"id": mid, "listening": _listening(data.get("handle") or "")}))
             except Exception as e:
                 self._send(500, json.dumps({"error": str(e)}))
 

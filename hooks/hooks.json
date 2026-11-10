@@ -8,6 +8,12 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/run.sh\" hook-start",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/run.sh\" wait",
+            "asyncRewake": true,
+            "timeout": 21700
           }
         ]
       }
