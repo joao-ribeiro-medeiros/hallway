@@ -190,7 +190,7 @@ Delete everything any time with `rm -rf ~/.claude/hallway`.
 ## Limits
 
 - Developed and tested on **macOS** with Claude Code. Linux probably works. Windows support (liveness check, `python` fallback, `.cmd` shim) was contributed by Mo. Mitwaly after a first report; it is not covered by the smoke test.
-- It relies on `~/.claude/sessions/` and the desktop app's session records, which are not documented interfaces and may change.
+- It relies on the `sessions/` folder of each Claude Code config folder and the desktop app's session records, which are not documented interfaces and may change.
 - Idle sessions need a nudge to notice new mail (see above).
 - Sessions rarely clear their inbox, so only mail from the last 7 days is shown at startup.
 
@@ -201,6 +201,7 @@ Delete everything any time with `rm -rf ~/.claude/hallway`.
 | `HALLWAY_HOME` | Where the board lives (default `~/.claude/hallway`) |
 | `HALLWAY_NO_PROMPTS` | Do not record your prompts |
 | `HALLWAY_TITLES_DIR` | Read session titles from this folder instead |
+| `HALLWAY_SESSIONS_DIR` | Read the roster only from these folders (a `:`-separated list) instead of `~/.claude/sessions`, `$CLAUDE_CONFIG_DIR/sessions` and `~/.claude*/sessions` |
 
 ## License
 

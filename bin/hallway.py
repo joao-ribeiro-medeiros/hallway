@@ -20,7 +20,30 @@ from datetime import datetime, timezone
 HOME = os.path.expanduser("~")
 ROOT = os.environ.get("HALLWAY_HOME", os.path.join(HOME, ".claude", "hallway"))
 DB_PATH = os.path.join(ROOT, "hallway.db")
-SESSIONS_DIR = os.environ.get("HALLWAY_SESSIONS_DIR", os.path.join(HOME, ".claude", "sessions"))
+
+
+def _sessions_dirs():
+    """Where Claude Code keeps its registry of running sessions. Each config profile has
+    its own: `~/.claude/sessions` by default, `$CLAUDE_CONFIG_DIR/sessions` for a profile
+    started with CLAUDE_CONFIG_DIR. Read them all, so sessions of every profile are live
+    (the deck, started from a plain shell, has no CLAUDE_CONFIG_DIR to go by, hence the
+    sibling `~/.claude*` folders). HALLWAY_SESSIONS_DIR (a path list) replaces the search."""
+    if os.environ.get("HALLWAY_SESSIONS_DIR"):
+        return [d for d in os.environ["HALLWAY_SESSIONS_DIR"].split(os.pathsep) if d]
+    dirs = [os.path.join(HOME, ".claude", "sessions")]
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        dirs.append(os.path.join(os.path.expanduser(os.environ["CLAUDE_CONFIG_DIR"]), "sessions"))
+    dirs += sorted(glob.glob(os.path.join(HOME, ".claude*", "sessions")))
+    out, seen = [], set()
+    for d in dirs:
+        key = os.path.realpath(d)
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
+
+
+SESSIONS_DIRS = _sessions_dirs()
 # Inside a container we cannot see host PIDs. Claude Code removes a session's
 # registry file when it exits, so the file's presence is the liveness signal there.
 CHECK_PIDS = os.environ.get("HALLWAY_NO_PID_CHECK", "") == ""
@@ -284,15 +307,22 @@ def project_of(cwd):
 
 def live_sessions():
     """Sessions currently running on this machine, from Claude Code's own registry."""
-    out = {}
-    for path in glob.glob(os.path.join(SESSIONS_DIR, "*.json")):
+    out, sids = {}, set()
+    for path in [p for d in SESSIONS_DIRS for p in glob.glob(os.path.join(d, "*.json"))]:
         try:
             with open(path) as fh:
                 rec = json.load(fh)
             pid = rec.get("pid")
             if pid and CHECK_PIDS and not _pid_alive(pid):
                 continue
-            out[rec.get("name") or ("pid-%s" % pid)] = rec
+            sid = rec.get("sessionId")
+            if sid and sid in sids:
+                continue
+            sids.add(sid)
+            name = rec.get("name") or ("pid-%s" % pid)
+            if name in out:  # two profiles can derive the same name
+                name = "%s-%s" % (name, (sid or str(pid))[:4])
+            out[name] = rec
         except Exception:
             continue
     return out

@@ -95,5 +95,16 @@ ok "an older copy never repoints a newer shim" 'grep -q "9.9.9" "$T/.local/bin/h
 CTX=$(C $SB context)
 ok "the work context lists ledger rows for an AI to read" 'echo "$CTX" | grep -q "^EE-1234: Promo field" && echo "$CTX" | grep -q "Needed: OK for the release?"'
 ok "publishing is off unless configured"     'C $SB context --publish 2>&1 | grep -q -i "published\|off\|Errno\|No such file" '
+# Sessions of a second config profile (CLAUDE_CONFIG_DIR=~/.claude-work) are live too
+sleep 300 & PC=$!; SC=cccccccc-1111-2222-3333-444444444444
+mkdir -p "$T/.claude-work/sessions" "$T/elsewhere/sessions"
+printf '{"pid":%s,"sessionId":"%s","cwd":"%s","name":"c"}' $PC $SC "$T/work/payments" > "$T/.claude-work/sessions/$PC.json"
+ok "a session of another profile is live"    'run python3 "$BIN" who --live --json | grep -q "s-cccccccc"'
+ok "it is listed once, not once per profile" '[ "$(run CLAUDE_CONFIG_DIR="$T/.claude-work" python3 "$BIN" who --live --json | grep -c "\"handle\": \"s-cccccccc\"")" = 1 ]'
+mv "$T/.claude-work/sessions/$PC.json" "$T/elsewhere/sessions/"
+ok "CLAUDE_CONFIG_DIR outside HOME is read"  'run CLAUDE_CONFIG_DIR="$T/elsewhere" python3 "$BIN" who --live --json | grep -q "s-cccccccc"'
+ok "HALLWAY_SESSIONS_DIR takes a path list"  'run HALLWAY_SESSIONS_DIR="$T/nowhere:$T/elsewhere/sessions" python3 "$BIN" who --live --json | grep -q "s-cccccccc"'
+ok "and replaces the default search"         '! run HALLWAY_SESSIONS_DIR="$T/nowhere" python3 "$BIN" who --live --json | grep -q "s-cccccccc"'
+kill $PC 2>/dev/null
 ok "all data stays inside the test HOME"      '[ -f "$T/.claude/hallway/hallway.db" ]'
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]
