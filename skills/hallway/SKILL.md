@@ -72,13 +72,23 @@ Your user reads the Ledger to see every ticket at a glance instead of opening ea
 you start on a ticket and at each milestone (PR opened, review requested, approved, merged, deployed,
 In Test, blocked, waiting on someone, done), run one line:
 ```bash
-hallway ledger set EE-4236 --title "few words" --summary "1-2 plain lines" --status "PR open" \
-  --pr 6095 --waiting-on <you|a person's name|ci|release|nobody> --need "the exact question for them"
+hallway ledger set PROJ-123 --title "few words" --summary "1-2 plain lines" --status "PR open" \
+  --pr 482 --waiting-on <you|a person's name|ci|release|nobody> --need "the exact question for them"
 ```
 Only the fields you pass change. Use `--waiting-on you` only for a decision that is genuinely your
-user's. When it is finished: `hallway ledger set EE-4236 --done`.
+user's. When it is finished: `hallway ledger set PROJ-123 --done`.
 
 ## Messages from the deck
 Your user can write to you from the Hallway deck (on their Mac or phone). A background hook wakes you
 with it, starting `[Hallway] From your user:`. Treat it exactly like a message typed in this chat.
 No session needs to act as a relay.
+
+## Acting as the dispatcher
+Some sessions are asleep: the desktop app has stopped their process, so nothing can wake them except a
+message pushed in through the app. When the user asks you to "be the Hallway dispatcher":
+1. Run `hallway dispatch` as a **background** command. It waits, using no tokens, until the user sends a
+   message from the deck to a session that is asleep, then returns what to deliver.
+2. Deliver each item with `mcp__ccd_session_mgmt__send_message`, using its `session_id` and its `message`
+   word for word (it already starts with `[Hallway] From your user:`).
+3. Run `hallway dispatch` in the background again. Say nothing to the user unless a delivery failed.
+4. If the user sends you "resume", the dispatcher had gone to sleep: just start step 1 again.

@@ -197,6 +197,13 @@ button,textarea{font:inherit;color:inherit}
 .lsearch input{all:unset;flex:1;font:400 14px var(--sans);color:#fff}
 .lchip{all:unset;cursor:pointer;font:500 12px var(--sans);color:var(--dim);padding:8px 12px;border:1px solid var(--line);border-radius:6px;background:#0b1520}
 .lchip.on{color:#fff;border-color:var(--line2)}
+.lgrp{display:flex;gap:4px}
+.lact{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.lact select,.lact textarea{width:100%;background:rgba(0,0,0,.35);border:1px solid var(--line2);border-radius:6px;color:#fff;padding:9px 10px;font:400 13px/1.45 var(--sans);outline:none}
+.lact select{margin-bottom:8px}
+.lact textarea{min-height:96px;resize:vertical}
+.lact .row2{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.lact .note{font:500 10.5px var(--mono);letter-spacing:.06em;color:var(--dim)}
 .lbulk{all:unset;cursor:pointer;font:600 12px var(--sans);color:#1a1000;background:var(--amber);padding:9px 14px;border-radius:6px}
 .lbulk[hidden]{display:none}
 .ltab{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#0b1520}
@@ -226,6 +233,11 @@ button,textarea{font:inherit;color:inherit}
 .lsince{font:500 12px var(--mono);color:var(--dim);white-space:nowrap}
 .lout{display:block;margin-top:6px;font:600 9.5px var(--mono);letter-spacing:.08em;color:var(--red)}
 .lsince.old{color:var(--amber)}
+.lactcell{text-align:right;white-space:nowrap}
+.lack{all:unset;cursor:pointer;font:600 11.5px var(--sans);color:#d9fbe9;padding:7px 12px;border-radius:6px;border:1px solid rgba(98,255,168,.45);background:rgba(98,255,168,.08);white-space:nowrap}
+.lack::before{content:"✓ ";color:var(--green)}
+.lack:hover{background:rgba(98,255,168,.18);border-color:var(--green)}
+@media (max-width:900px){ .lactcell{text-align:left;padding-top:8px} }
 .ldet td{padding:0 14px 16px;border-bottom:1px solid rgba(94,242,255,.07);background:rgba(94,242,255,.06)}
 .ldetbox{display:grid;grid-template-columns:2fr 1fr;gap:18px;padding:14px 16px;border:1px solid var(--line);border-radius:8px;background:#08121b}
 .ldetbox h4{margin:0 0 8px;font:600 10px var(--mono);letter-spacing:.16em;color:var(--dim)}
@@ -264,6 +276,7 @@ body.phone .top{display:none}
     <div class="chip am" id="cWait"></div>
     <div class="chip rd" id="cBlock"></div>
     <div class="chip" id="cMsgs"></div>
+    <a class="chip rd" id="cDisp" hidden></a>
   </div>
   <div class="tabs"><a href="#deck">DECK</a><a href="#ledger">LEDGER</a><a href="#wall">WALL</a><a href="#focus">FOCUS</a><a href="#glance">PHONE</a></div>
   <div class="clock" id="clock"></div>
@@ -296,10 +309,10 @@ body.phone .top{display:none}
   <div class="lcards" id="lcards"></div>
   <div class="lbar">
     <div class="lsearch"><span style="color:var(--dim)">⌕</span><input id="lq" placeholder="Search a ticket, PR, person or word…"></div>
-    <button class="lchip" id="lDone">Show done</button><button class="lchip" id="lOld" hidden></button>
+    <span class="lgrp"><button class="lchip" data-g="status">By status</button><button class="lchip" data-g="project">By project</button></span><button class="lchip" id="lDone">Show done</button><button class="lchip" id="lOld" hidden></button>
     <button class="lbulk" id="lBulk" hidden></button>
   </div>
-  <div class="ltab"><table><thead><tr><th style="width:150px">TICKET</th><th>WHAT IT IS</th><th style="width:160px">STATUS</th><th style="width:150px">PR</th><th style="width:240px">WAITING ON</th><th style="width:80px">SINCE</th></tr></thead><tbody id="lrows"></tbody></table></div>
+  <div class="ltab"><table><thead><tr><th style="width:150px">TICKET</th><th>WHAT IT IS</th><th style="width:160px">STATUS</th><th style="width:150px">PR</th><th style="width:240px">WAITING ON</th><th style="width:80px">SINCE</th><th style="width:120px"></th></tr></thead><tbody id="lrows"></tbody></table></div>
   <div class="lfoot" id="lfoot"></div>
   <div class="ltoast" id="ltoast"></div>
 </section>
@@ -392,7 +405,9 @@ function replyStatus(handle) {
   if (m && m.delivered) return "✓ DELIVERED TO THE SESSION";
   const s = S.sessions.find(x => x.handle === handle);
   return s && s.listening ? "✓ SENT · IT REACHES THE SESSION IN A FEW SECONDS"
-    : "✓ SAVED · THE SESSION IS ASLEEP. IT GETS THIS AS SOON AS IT WAKES; OPEN IT ON YOUR MAC TO WAKE IT NOW";
+    : (S.dispatcher && ["listening", "restarting"].includes(S.dispatcher.state)
+       ? "✓ SENT · THE SESSION IS ASLEEP; THE DISPATCHER IS WAKING IT"
+       : "✓ SAVED · THE SESSION IS ASLEEP AND THE DISPATCHER IS OFF. IT GETS THIS WHEN IT NEXT WAKES");
 }
 
 /* ------------------------------------------------------- needs-you card */
@@ -428,7 +443,8 @@ function compose(s) {
   $("#cmT").textContent = s.title;
   $("#cmD").textContent = s.state === "wait" ? question(s.said) : (s.said || s.prompt || "");
   $("#cmNote").textContent = s.listening ? "LISTENING · IT WAKES UP WITH THIS, AS IF YOU TYPED IT"
-    : "ASLEEP · IT GETS THIS AS SOON AS IT WAKES (OPEN IT ON YOUR MAC TO WAKE IT NOW)";
+    : (S.dispatcher && ["listening", "restarting"].includes(S.dispatcher.state)
+       ? "ASLEEP · THE DISPATCHER WILL WAKE IT WITH THIS" : "ASLEEP · IT GETS THIS WHEN IT NEXT WAKES (DISPATCHER IS OFF)");
   $("#cmNote").style.color = ""; $("#cmText").value = drafts[s.handle] || "";
   $("#compose").classList.add("on"); setTimeout(() => $("#cmText").focus(), 50);
 }
@@ -455,6 +471,10 @@ function render() {
   $("#cWait").classList.toggle("zero", !nw);
   $("#cBlock").textContent = nb + " BLOCKED"; $("#cBlock").classList.toggle("zero", !nb);
   $("#cMsgs").textContent = S.messages_today + " MESSAGES TODAY";
+  const dp = S.dispatcher || {state:"none"}, dc = $("#cDisp");
+  dc.hidden = dp.state !== "asleep";
+  if (dp.state === "asleep") { dc.textContent = "⚠ DISPATCHER ASLEEP · OPEN IT AND SEND 'RESUME'";
+    dc.href = dp.host ? "claude://code/continue?session=" + dp.host : "#"; dc.style.textDecoration = "none"; }
   if (VIEW === "deck") renderDeck(att);
   if (VIEW === "wall") renderWall();
   if (VIEW === "focus") renderFocus(att);
@@ -754,6 +774,7 @@ function renderGlance(att) {
 
 /* ================================================================ ledger */
 let L = null, lFilter = "all", lQ = "", lOpen = null, lShowDone = false, lShowOld = false;
+let lGroup = (() => { try { return localStorage.getItem("hallway.lgroup") || "status"; } catch (e) { return "status"; } })();
 const LCOL = {you:"#ffb547", approver:"#a99bff", review:"#6aa8ff", moving:"#5ef2ff", done:"#62ffa8"};
 const STCOL = s => /fail|block|changes/i.test(s) ? "#ff5470" : /ready|approved|merged|done|in test/i.test(s) ? "#62ffa8" :
   /decision|waiting/i.test(s) ? "#a99bff" : /review/i.test(s) ? "#6aa8ff" : /hold|draft/i.test(s) ? "#7f99a7" : "#5ef2ff";
@@ -781,7 +802,7 @@ function prCell(r) {
   if (p.draft) bits.push(`<span class="mid">draft</span>`);
   if (p.ci) bits.push(`<span class="${p.ci === "green" ? "ok" : p.ci === "failing" ? "bad" : "mid"}">CI ${p.ci}</span>`);
   if (p.review) bits.push(`<span class="${p.review === "approved" ? "ok" : p.review === "changes_requested" ? "bad" : "mid"}">${p.review.replace("_", " ").toLowerCase()}</span>`);
-  const repo = p.repo.split("/")[1].replace(/^ignitetech-/, "");
+  const repo = p.repo.split("/")[1];
   return `<a href="${esc(p.url)}" target="_blank" onclick="event.stopPropagation()">#${p.number}</a> <span style="color:var(--faint);font-size:10px">${esc(repo)}</span><span class="s">${bits.join(" · ") || "open"}</span>`;
 }
 function whoCell(r) {
@@ -800,8 +821,8 @@ async function loadLedger() {
 function renderLedger() {
   if (!L) return;
   const rows = L.rows.map(r => ({...r, b:bucketOf(r)}));
-  const appr = L.approvers.length === 1 ? personName(L.approvers[0]).toUpperCase() : "APPROVAL";
-  const B = {you:["NEEDS YOU", "Decisions only you can make"], approver:["WAITING ON " + appr, "Approvals and release go"],
+  const apprNames = L.approvers.map(personName).join(", ");
+  const B = {you:["NEEDS YOU", "Decisions only you can make"], approver:["WAITING ON APPROVAL", apprNames ? "From " + apprNames : "Sign-offs and release go"],
     review:["WAITING ON REVIEW OR CI", "A teammate, a reviewer or CI"], moving:["MOVING / IN TEST", "Nobody is blocking it"], done:["DONE", "Last 7 days"]};
   const nOld = rows.filter(r => r.b === "old").length;
   const cards = $("#lcards"); cards.innerHTML = "";
@@ -811,7 +832,7 @@ function renderLedger() {
     c.onclick = () => { lFilter = lFilter === k ? "all" : k; if (k === "done") lShowDone = true; renderLedger(); }; cards.appendChild(c); }
   const apprRows = rows.filter(r => r.b === "approver");
   const bulk = $("#lBulk"); bulk.hidden = !apprRows.length;
-  bulk.textContent = `Copy one message for ${personName(L.approvers[0] || "")} (${apprRows.length})`;
+  bulk.textContent = `Copy one message for ${apprNames || "your approver"} (${apprRows.length})`;
   bulk.onclick = () => { const txt = `${personName(L.approvers[0] || "")}, ${apprRows.length} things waiting on your go:\n\n` +
       apprRows.map((r, i) => `${i + 1}. *${r.ticket}* ${r.title}${r.pr_live ? ` (PR #${r.pr_live.number})` : r.pr ? ` (PR #${String(r.pr).split("#").pop()})` : ""}: ${r.need || r.status}`).join("\n") +
       `\n\nEach question is also on its ticket if you prefer to answer there.`;
@@ -821,11 +842,19 @@ function renderLedger() {
   const body = $("#lrows"); body.innerHTML = "";
   const list = rows.filter(r => (lFilter === "all" || r.b === lFilter) && (lShowDone || r.b !== "done" || lFilter === "done") && (lShowOld || r.b !== "old") &&
     (!lQ || JSON.stringify(r).toLowerCase().includes(lQ.toLowerCase())));
-  if (!list.length) body.innerHTML = `<tr><td colspan="6" class="empty">Nothing here yet. Sessions add their tickets as they reach milestones.</td></tr>`;
-  const groups = {...B, ...(lShowOld ? {old:["OLD OPEN PRS", ""]} : {})};
+  if (!list.length) body.innerHTML = `<tr><td colspan="7" class="empty">Nothing here yet. Sessions add their tickets as they reach milestones.</td></tr>`;
+  document.querySelectorAll("[data-g]").forEach(b => b.classList.toggle("on", b.dataset.g === lGroup));
+  const bOrder = {you:0, approver:1, review:2, moving:3, done:4, old:5};
+  let groups, keyOf;
+  if (lGroup === "project") {
+    const counts = {}; list.forEach(r => counts[r.project] = (counts[r.project] || 0) + 1);
+    groups = Object.fromEntries(Object.keys(counts).sort((a, z) => counts[z] - counts[a]).map(p => [p, [p.toUpperCase(), ""]]));
+    keyOf = r => r.project;
+  } else { groups = {...B, ...(lShowOld ? {old:["OLD OPEN PRS", ""]} : {})}; keyOf = r => r.b; }
   for (const k of Object.keys(groups)) {
-    const g = list.filter(r => r.b === k).sort((a, z) => (lSince(a) || 9e12) - (lSince(z) || 9e12)); if (!g.length) continue;
-    body.insertAdjacentHTML("beforeend", `<tr class="grp" style="--gc:${LCOL[k] || "#7f99a7"}"><td colspan="6">${groups[k][0]}<span>${g.length}${k === "old" ? " · not touched in " + OLD_DAYS + "+ days; close them or ask a session to finish them" : ""}</span></td></tr>`);
+    const g = list.filter(r => keyOf(r) === k).sort((a, z) => (bOrder[a.b] - bOrder[z.b]) || ((lSince(a) || 9e12) - (lSince(z) || 9e12)));
+    if (!g.length) continue;
+    body.insertAdjacentHTML("beforeend", `<tr class="grp" style="--gc:${lGroup === "project" ? "#9fe9f5" : (LCOL[k] || "#7f99a7")}"><td colspan="7">${groups[k][0]}<span>${g.length}${k === "old" ? " · not touched in " + OLD_DAYS + "+ days; close them or ask a session to finish them" : ""}</span></td></tr>`);
     for (const r of g) {
       const id = r.ticket + "|" + (r.pr || "") + "|" + (r.session ? r.session.handle : ""), ts = lSince(r);
       const old = ts && Date.now() / 1000 - ts > 86400 && ["you", "approver", "review"].includes(r.b);
@@ -834,23 +863,52 @@ function renderLedger() {
         <td class="lsum"><b>${esc(r.title || r.ticket)}</b>${r.summary ? `<span>${esc(short(r.summary, 200))}</span>` : ""}</td>
         <td><span class="lst" style="--sc:${STCOL(r.status)}">${esc((r.status || "—").toUpperCase())}</span>${r.outdated ? `<span class="lout" title="${esc(r.outdated)}">⚠ ROW OUTDATED</span>` : ""}${r.jira_alert ? `<span class="lout" style="color:var(--amber)" title="${esc(r.jira_alert)}">💬 NEW JIRA COMMENT</span>` : ""}</td>
         <td class="lpr">${prCell(r)}</td><td>${whoCell(r)}</td>
-        <td class="lsince${old ? " old" : ""}">${ts ? ago(ts) : ""}</td>`;
+        <td class="lsince${old ? " old" : ""}">${ts ? ago(ts) : ""}</td>
+        <td class="lactcell">${(r.source === "jira" || r.jira_alert) ? `<button class="lack" title="Hide this until someone comments on the ticket again">Mark done</button>` : ""}</td>`;
       tr.onclick = () => { lOpen = lOpen === id ? null : id; renderLedger(); };
+      const qa = tr.querySelector(".lack"); if (qa) qa.onclick = e => { e.stopPropagation(); ackTicket(r); };
       body.appendChild(tr);
       if (lOpen === id) {
         const sess = r.session, jira = L.jira_url && ticketish(r.ticket) ? L.jira_url + r.ticket : "";
         const tr2 = document.createElement("tr"); tr2.className = "ldet";
-        tr2.innerHTML = `<td colspan="6"><div class="ldetbox"><div>
+        tr2.innerHTML = `<td colspan="7"><div class="ldetbox"><div>
             ${r.summary ? `<h4>WHAT IT IS</h4><p>${esc(r.summary)}</p>` : ""}
             ${r.need ? `<h4>WHAT'S NEEDED${r.waiting_on ? " FROM " + esc(personName(r.waiting_on).toUpperCase()) : ""}</h4><p class="q">${esc(r.need)}</p>` : ""}
             ${r.pr_live ? `<h4>PULL REQUEST</h4><p>${esc(r.pr_live.title)}${r.pr_live.reviewers.length ? "<br>Review requested from " + esc(r.pr_live.reviewers.join(", ")) : ""}${r.pr_live.mergeable === "conflicting" ? "<br><b style='color:var(--red)'>Merge conflict</b>" : ""}</p>` : ""}
             ${r.outdated ? `<h4 style="color:var(--red)">OUTDATED</h4><p>The ledger says "${esc(r.status)}", but ${esc(r.outdated)}. The session will be reminded the next time it works on it.</p>` : ""}
             ${r.jira && r.jira.last_comment && !r.jira.last_comment.by_me ? `<h4 style="color:${r.jira.last_comment.for_me ? "var(--amber)" : "var(--dim)"}">LATEST JIRA COMMENT · ${esc(r.jira.last_comment.author.toUpperCase())}${r.jira.last_comment.for_me ? " · FOR YOU" : ""}</h4><p>${esc(r.jira.last_comment.excerpt)}</p>` : ""}
-            <h4>LAST UPDATED</h4><p>${r.updated ? new Date(r.updated * 1000).toLocaleString() + " by the session" : "Not reported by a session yet; this row comes from GitHub."}</p></div>
+            <h4>LAST UPDATED</h4><p>${r.updated ? new Date(r.updated * 1000).toLocaleString() + (r.source === "session" ? " by the session" : "") : "Not reported by a session yet."}</p>
+            <div class="lact"><h4>ACT ON IT</h4>
+              <select data-to>${sessionOptions(r)}</select>
+              <textarea data-text>${esc(actText(r))}</textarea>
+              <div class="row2"><button class="fb p" data-send>Send to this session</button>
+                ${document.body.classList.contains("phone") ? "" : `<a class="fb" data-new href="#">Start a new session</a>`}
+                <span class="note" data-note></span></div></div></div>
           <div class="lacts">${sess && sess.host && !document.body.classList.contains("phone") ? `<a class="fb p" href="claude://claude.ai/epitaxy/${esc(sess.host)}">Open the session</a>` : ""}
             ${sess && sess.handle ? `<button class="fb" data-msg>Message the session</button>` : ""}
             ${(r.jira && r.jira.url) || jira ? `<a class="fb" target="_blank" href="${esc((r.jira && r.jira.url) || jira)}">Open ${esc(r.ticket)} in Jira</a>` : ""}
-            ${r.pr_live ? `<a class="fb" target="_blank" href="${esc(r.pr_live.url)}">Open PR #${r.pr_live.number}</a>` : ""}</div></div></td>`;
+            ${r.pr_live ? `<a class="fb" target="_blank" href="${esc(r.pr_live.url)}">Open PR #${r.pr_live.number}</a>` : ""}
+            ${(r.source === "jira" || r.jira_alert) ? `<button class="fb p" data-ack>Done, I've handled it</button>` : ""}</div></div></td>`;
+        const sel = tr2.querySelector("[data-to]"), ta = tr2.querySelector("[data-text]"), note = tr2.querySelector("[data-note]");
+        tr2.querySelectorAll("select,textarea").forEach(x => x.onclick = e => e.stopPropagation());
+        const showListen = () => { const s = S && S.sessions.find(x => x.handle === sel.value);
+          const dOn = S && S.dispatcher && ["listening", "restarting"].includes(S.dispatcher.state);
+          note.textContent = !sel.value ? "" : s && s.listening ? "LISTENING · IT STARTS RIGHT AWAY" : dOn ? "ASLEEP · THE DISPATCHER WILL WAKE IT" : "ASLEEP · IT GETS THIS WHEN IT NEXT WAKES"; };
+        sel.onchange = showListen; showListen();
+        tr2.querySelector("[data-send]").onclick = async e => { e.stopPropagation(); if (!sel.value) return note.textContent = "PICK A SESSION FIRST";
+          note.textContent = "SENDING…";
+          try { await sendReply(sel.value, ta.value.trim()); note.style.color = "var(--green)";
+            const name = sel.options[sel.selectedIndex].text.split(" · ")[0];
+            if (r.source === "jira" || r.jira_alert) { await ackTicket(r, true); }
+            toast(`Sent to ${name}.`); }
+          catch (err) { note.style.color = "var(--red)"; note.textContent = "NOT SENT: " + err.message; } };
+        const nl = tr2.querySelector("[data-new]");
+        if (nl) nl.onclick = e => { e.stopPropagation(); e.preventDefault();
+          const q = new URLSearchParams({q: ta.value.trim()}); if (r.folder) q.append("folder", r.folder);
+          location.href = "claude://code/new?" + q.toString();
+          if (r.source === "jira" || r.jira_alert) ackTicket(r, true); };
+        const ab = tr2.querySelector("[data-ack]");
+        if (ab) ab.onclick = e => { e.stopPropagation(); ackTicket(r); };
         const mb = tr2.querySelector("[data-msg]");
         if (mb) mb.onclick = e => { e.stopPropagation(); const s = (S && S.sessions.find(x => x.handle === sess.handle)) ||
           {handle:sess.handle, title:sess.title, state:"idle", group:"", said:"", prompt:"", live:sess.live}; compose(s); };
@@ -862,9 +920,35 @@ function renderLedger() {
   const jr = L.jira_error ? ` Jira: ${esc(L.jira_error)}.` : L.jira_at ? ` Jira checked ${ago(L.jira_at)} ago.` : "";
   $("#lfoot").innerHTML = `${rows.filter(r => r.source === "session").length} rows from sessions, ${rows.filter(r => r.source === "github").length} open PRs and ${rows.filter(r => r.source === "jira").length} Jira tickets no session has reported. ${gh}.${jr}`;
 }
+function sessionOptions(r) {
+  const all = (S ? S.sessions : []).filter(s => s.live);
+  const owner = r.session && r.session.handle;
+  const score = s => (s.handle === owner ? 0 : s.group === r.project ? 1 : 2);
+  const sorted = [...all].sort((a, z) => score(a) - score(z) || z.active - a.active);
+  const opts = sorted.map(s => `<option value="${esc(s.handle)}"${s.handle === owner ? " selected" : ""}>${esc(s.title)} · ${esc(s.group || "")}${s.handle === owner ? " · owns this" : ""}${s.listening ? "" : " · asleep"}</option>`);
+  return (owner ? "" : `<option value="">Pick a session…</option>`) + opts.join("");
+}
+function actText(r) {
+  const lc = r.jira && r.jira.last_comment;
+  const head = `${r.ticket}${r.title ? " (" + r.title + ")" : ""}`;
+  const ask = lc && !lc.by_me ? `${lc.author} commented on Jira: "${lc.excerpt}"` : (r.need ? `What's needed: ${r.need}` : `Status: ${r.status}`);
+  return `${head}. ${ask}\n\nPlease handle this: read the ticket (and the full comment), do what's needed, reply on the ticket, and keep your Ledger row current. Ask me before merging or deploying anything.`;
+}
+async function ackTicket(r, quiet) {
+  const until = (r.jira && r.jira.last_comment && r.jira.last_comment.at) || Date.now() / 1000;
+  try {
+    const res = await fetch("/api/ack", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ticket:r.ticket, until})});
+    if (!res.ok) throw 0;
+    L.rows = L.rows.filter(x => !(x.ticket === r.ticket && x.source === "jira")).map(x => x.ticket === r.ticket ? {...x, jira_alert:""} : x);
+    renderLedger(); if (!quiet) toast(`${r.ticket} cleared. It comes back if someone comments again.`);
+    lastAck = r.ticket;
+  } catch (e) { toast("Couldn't clear it. Try again."); }
+}
+let lastAck = null;
 function toast(t) { const e = $("#ltoast"); e.textContent = t; e.style.display = "block"; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = "none", 2600); }
 $("#lq").oninput = e => { lQ = e.target.value; renderLedger(); };
 $("#lDone").onclick = () => { lShowDone = !lShowDone; renderLedger(); };
+document.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { lGroup = b.dataset.g; try { localStorage.setItem("hallway.lgroup", lGroup); } catch (e) {} renderLedger(); });
 $("#lOld").onclick = () => { lShowOld = !lShowOld; renderLedger(); };
 setInterval(() => { if (VIEW === "ledger" && !document.hidden && !editing()) loadLedger(); }, 15000);
 

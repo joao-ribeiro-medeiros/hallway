@@ -69,7 +69,7 @@ Run `hallway --help` for the rest.
 - **Phone**: the same, sized for a phone. Add it to your home screen and it opens like an app.
 
 Sessions are grouped by their sidebar group in the desktop app, or by repository. To rename groups,
-create `~/.claude/hallway/deck.json` with `{"group_alias": {"IN PROGRESS": "Eloquens"}}`.
+create `~/.claude/hallway/deck.json` with `{"group_alias": {"IN PROGRESS": "Backend"}}`.
 
 ### The ledger
 
@@ -81,8 +81,8 @@ what waits on review or CI, what is moving and what is done.
 Sessions keep their own rows current with one line at each milestone:
 
 ```
-hallway ledger set EE-4236 --title "Kerio login failures" --summary "Stop checking switched-off mailboxes" \
-  --status "Ready to merge" --pr 6095 --waiting-on antonios --need "Does it ride 1.26.3?"
+hallway ledger set PROJ-123 --title "Login failures" --summary "Stop retrying disabled accounts" \
+  --status "Ready to merge" --pr 482 --waiting-on alex --need "Can this go in the next release?"
 ```
 
 Only the fields you pass change. Sessions are reminded at the right moments without anyone asking:
@@ -94,8 +94,8 @@ failing on a PR the row calls ready.
 
 Every open PR of yours that no session has reported still shows up
 (from `gh search prs --author=@me`), so nothing slips; PRs untouched for 45 days are tucked away.
-Settings live in `~/.claude/hallway/deck.json`: `approvers` (e.g. `["antonios"]`) gets its own column of
-cards, `jira_url` links ticket keys, and `people` maps GitHub logins to names.
+Settings live in `~/.claude/hallway/deck.json`: `approvers` (the people who sign off releases, e.g.
+`["alex"]`) get their own "Waiting on approval" card, `jira_url` links ticket keys, and `people` maps GitHub logins to names.
 
 ### A live work context for your AI assistant
 
@@ -134,6 +134,11 @@ Tap a session on the deck and write to it. When a session finishes a turn, a sma
 starts waiting for your messages to it. It reads the local board every two seconds and uses no tokens.
 When you send something, it wakes that session with your message, marked `[Hallway] From your user:`,
 using Claude Code's `asyncRewake` hook option. A session that is not running reads it when it next starts.
+
+The desktop app stops idle sessions' processes, and a stopped session has no listener. For those, one
+session can act as the **dispatcher**: ask it to "be the Hallway dispatcher". It runs `hallway dispatch`
+in the background, which waits without using tokens until you message a session that is asleep, then
+pushes your message in through the app's session messaging, which wakes that session.
 
 Messages from other agents never wake a session unless they are marked urgent (`hallway send --urgent`),
 so two agents cannot keep waking each other up.

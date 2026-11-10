@@ -40,31 +40,34 @@ stop $SB "$T/work/payments" "Still waiting for QA." "env X=1"
 ok "a status the session set itself is kept"  'C $SA peers | grep "s-bbbbbbbb" | grep -q "blocked: waiting on the QA deploy"'
 stop $SA "$T/work/checkout" "Opened the pull request." "env HALLWAY_NO_TURN_STATUS=1"
 ok "HALLWAY_NO_TURN_STATUS=1 records nothing" '! C $SB day --full | grep -q "Opened the pull request"'
-C $SA ledger set EE-1234 --title "Promo field" --status "PR open" --pr 42 --waiting-on Antonios --need "OK for the release?" >/dev/null
-C $SA ledger set EE-1234 --summary "Moves the promo field above the totals." >/dev/null
+C $SA ledger set PROJ-1234 --title "Promo field" --status "PR open" --pr 42 --waiting-on Alex --need "OK for the release?" >/dev/null
+C $SA ledger set PROJ-1234 --summary "Moves the promo field above the totals." >/dev/null
 ok "a ledger update only changes the fields given" 'C $SA ledger --json | grep -q "OK for the release?" && C $SA ledger --json | grep -q "Moves the promo field"'
-MS=$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"gh pr create --title \\"EE-77: x\\""},"tool_response":"https://github.com/o/r/pull/901"}' $SA | run python3 "$BIN" milestone)
-ok "opening a PR reminds the session to update its row" 'echo "$MS" | grep -q "hallway ledger set EE-77" && echo "$MS" | grep -q -- "--pr 901"'
+MS=$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"gh pr create --title \\"PROJ-77: x\\""},"tool_response":"https://github.com/o/r/pull/901"}' $SA | run python3 "$BIN" milestone)
+ok "opening a PR reminds the session to update its row" 'echo "$MS" | grep -q "hallway ledger set PROJ-77" && echo "$MS" | grep -q -- "--pr 901"'
 LS=$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"ls"}}' $SA | run python3 "$BIN" milestone)
 HD=$(python3 -c "import json,sys;print(json.dumps({'session_id':sys.argv[1],'tool_name':'Bash','tool_input':{'command':\"cat >> notes.md <<'EOF'\\nremember: gh pr create needs a title\\nEOF\\ngit commit -m 'mention gh pr merge'\"}}))" $SA | run python3 "$BIN" milestone)
 ok "a command only mentioned in text is not a milestone" '[ -z "$HD" ]'
 ok "an ordinary command adds nothing"         '[ -z "$LS" ]'
-LC=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at EE-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
-ok "a ticket with no row gets one nudge"      'echo "$LC" | grep -q "EE-88 but it has no Ledger row"'
-LC2=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at EE-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
-LC3=$(printf '{"session_id":"%s","cwd":"%s","prompt":"Another Claude session sent a message: EE-99 is done"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
+LC=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at PROJ-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
+ok "a ticket with no row gets one nudge"      'echo "$LC" | grep -q "PROJ-88 but it has no Ledger row"'
+LC2=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at PROJ-88 please"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
+LC3=$(printf '{"session_id":"%s","cwd":"%s","prompt":"Another Claude session sent a message: PROJ-99 is done"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
 ok "a relayed peer message does not count as your ticket" '[ -z "$LC3" ]'
 ok "and not again straight away"              '[ -z "$LC2" ]'
 PORT=$((20000 + RANDOM % 20000))
-run env HALLWAY_NO_GITHUB=1 HALLWAY_NO_JIRA=1 python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!
+run env HALLWAY_NO_GITHUB=1 HALLWAY_NO_JIRA=1 HALLWAY_NO_WATCHDOG=1 python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!
 for i in $(seq 1 30); do curl -s -o /dev/null "http://127.0.0.1:$PORT/api/deck" && break; sleep .2; done
 ok "deck serves the live state"               'curl -s "http://127.0.0.1:$PORT/api/deck" | grep -q "Should I open the pull request"'
-ok "the deck serves the ledger"               'curl -s "http://127.0.0.1:$PORT/api/ledger" | grep -q "\"waiting_on\": \"antonios\""'
+ok "the deck serves the ledger"               'curl -s "http://127.0.0.1:$PORT/api/ledger" | grep -q "\"waiting_on\": \"alex\""'
 ok "deck refuses another Tailscale user"      '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Tailscale-User-Login: someone@else.com" "http://127.0.0.1:$PORT/api/deck")" = 403 ]'
 ok "a reply from the deck is stored"          'curl -s -X POST -H "Content-Type: application/json" -d "{\"handle\":\"s-aaaaaaaa\",\"text\":\"Yes, open it.\"}" "http://127.0.0.1:$PORT/api/reply" | grep -q "\"id\""'
 BAD='{"handle":"s-aaaaaaaa","text":"injected"}'
 code(){ curl -s -o /dev/null -w "%{http_code}" "$@"; }
 ok "a cross-site form post is refused"        '[ "$(code -X POST -H "Content-Type: text/plain" -H "Origin: https://evil.example" -d "$BAD" "http://127.0.0.1:$PORT/api/reply")" = 403 ]'
+ACK='{"ticket":"PROJ-1234","until":1}'
+ok "a Jira row can be marked done"            '[ "$(code -X POST -H "Content-Type: application/json" -H "Origin: http://127.0.0.1:$PORT" -d "$ACK" "http://127.0.0.1:$PORT/api/ack")" = 200 ]'
+ok "marking done refuses a cross-site post"   '[ "$(code -X POST -H "Content-Type: text/plain" -H "Origin: https://evil.example" -d "$ACK" "http://127.0.0.1:$PORT/api/ack")" = 403 ]'
 ok "a rebound host name is refused"           '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Host: evil.example" "http://127.0.0.1:$PORT/api/deck")" = 403 ]'
 kill $PD 2>/dev/null; wait $PD 2>/dev/null
 ok "the relay hands the reply to the running session" 'C $SB relay --timeout 5 | grep -q "\[Hallway\] From your user: Yes, open it."'
@@ -93,7 +96,7 @@ mkdir -p "$T/.local/bin"; printf '#!/bin/sh\nexec python3 "/x/hallway/hallway/9.
 printf '{"session_id":"%s","cwd":"%s"}' $SB "$T/work/payments" | run python3 "$BIN" hook-start >/dev/null 2>&1
 ok "an older copy never repoints a newer shim" 'grep -q "9.9.9" "$T/.local/bin/hallway"'
 CTX=$(C $SB context)
-ok "the work context lists ledger rows for an AI to read" 'echo "$CTX" | grep -q "^EE-1234: Promo field" && echo "$CTX" | grep -q "Needed: OK for the release?"'
+ok "the work context lists ledger rows for an AI to read" 'echo "$CTX" | grep -q "^PROJ-1234: Promo field" && echo "$CTX" | grep -q "Needed: OK for the release?"'
 ok "publishing is off unless configured"     'C $SB context --publish 2>&1 | grep -q -i "published\|off\|Errno\|No such file" '
 # Sessions of a second config profile (CLAUDE_CONFIG_DIR=~/.claude-work) are live too
 sleep 300 & PC=$!; SC=cccccccc-1111-2222-3333-444444444444
@@ -106,5 +109,23 @@ ok "CLAUDE_CONFIG_DIR outside HOME is read"  'run CLAUDE_CONFIG_DIR="$T/elsewher
 ok "HALLWAY_SESSIONS_DIR takes a path list"  'run HALLWAY_SESSIONS_DIR="$T/nowhere:$T/elsewhere/sessions" python3 "$BIN" who --live --json | grep -q "s-cccccccc"'
 ok "and replaces the default search"         '! run HALLWAY_SESSIONS_DIR="$T/nowhere" python3 "$BIN" who --live --json | grep -q "s-cccccccc"'
 kill $PC 2>/dev/null
+DONE=$(run env CLAUDE_CODE_SESSION_ID=$SA python3 - "$HERE/bin" <<'PY'
+import sys, time, json; sys.path.insert(0, sys.argv[1]); import hallway as h
+class J:
+    def __init__(s, at): s.at = at
+    def snapshot(s):
+        lc = {"author": "A", "at": s.at, "excerpt": "?", "by_me": False, "mentions_me": True, "for_me": True}
+        return ({"PROJ-9001": {"key": "PROJ-9001", "summary": "T", "status": "In Progress", "priority": "High",
+                 "url": "u", "assigned": True, "last_comment": lc, "site": "x"}}, time.time(), None)
+c = h.connect(); t0 = time.time() - 600
+seen = lambda j: any(r["ticket"] == "PROJ-9001" for r in h.ledger_state(c, None, j)["rows"])
+before = seen(J(t0))
+c.execute("INSERT OR REPLACE INTO acks VALUES (?,?,?)", ("PROJ-9001", json.loads(json.dumps(t0)), time.time())); c.commit()
+print(before, seen(J(t0)), seen(J(t0)), seen(J(time.time())))
+PY
+)
+ok "after Done, the same comment never brings it back" '[ "$DONE" = "True False False True" ]'
+ok "dispatch returns nothing when no session is waiting on a message" 'C $SB dispatch --timeout 2 --grace 0 | grep -q "Nothing to deliver"'
+ok "the dispatcher leaves a heartbeat for the watchdog" '[ -f "$T/.claude/hallway/dispatcher.json" ]'
 ok "all data stays inside the test HOME"      '[ -f "$T/.claude/hallway/hallway.db" ]'
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]

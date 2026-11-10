@@ -120,8 +120,13 @@ CREATE TABLE IF NOT EXISTS status_log (
     text    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_status_log ON status_log(handle, at);
+CREATE TABLE IF NOT EXISTS acks (
+    ticket   TEXT PRIMARY KEY,
+    until_at REAL,          -- Jira comments at or before this time are handled
+    at       REAL
+);
 CREATE TABLE IF NOT EXISTS ledger (
-    ticket      TEXT NOT NULL,   -- EE-4236, or a short label when there is no ticket
+    ticket      TEXT NOT NULL,   -- PROJ-123, or a short label when there is no ticket
     handle      TEXT NOT NULL,   -- the session that owns this row
     title       TEXT,            -- what it is, a few words
     summary     TEXT,            -- one or two lines
@@ -625,7 +630,16 @@ def mark_read(conn, handle, ids):
     conn.commit()
 
 
-HUMAN_HANDLES = ("you", "soma", "user")
+def _human_handles():
+    """Senders that are the user, not an agent: the deck's own, plus any listed in deck.json."""
+    try:
+        extra = json.load(open(os.path.join(ROOT, "deck.json"))).get("human_handles") or []
+    except Exception:
+        extra = []
+    return tuple(["you", "user"] + [str(h) for h in extra])
+
+
+HUMAN_HANDLES = _human_handles()
 
 
 def sender_label(conn, handle):
@@ -970,7 +984,7 @@ def cmd_watch(conn, args):
 def search(conn, q, limit=60):
     """Find messages by their words, or by who wrote them."""
     like = "%" + q + "%"
-    # Sessions whose name matches, so searching "EE-3619" finds what it wrote.
+    # Sessions whose name matches, so searching "PROJ-123" finds what it wrote.
     handles = [r["handle"] for r in conn.execute(
         "SELECT handle FROM agents WHERE title LIKE ?1 OR role LIKE ?1 OR handle LIKE ?1", (like,))]
     handles += [r["handle"] for r in conn.execute(
@@ -1514,7 +1528,9 @@ def _sidebar_groups():
 
 
 def _pretty_project(name):
-    name = re.sub(r"^(ignitetech-|igt-)", "", name or "")
+    for prefix in _deck_conf().get("project_prefixes") or []:   # e.g. ["acme-"] to show "billing" not "acme-billing"
+        if (name or "").startswith(prefix):
+            name = name[len(prefix):]
     name = re.sub(r"-(ai|app|repo)$", "", name)
     return name.replace("-", " ").title() if name else "Other"
 
@@ -1610,6 +1626,7 @@ def deck_state(conn):
     midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
     today = conn.execute("SELECT COUNT(*) FROM messages WHERE ts >= ?", (midnight,)).fetchone()[0]
     return {"generated_at": t, "sessions": sessions, "messages": msgs, "names": names,
+            "dispatcher": dispatcher_status(),
             "known": sorted(known), "activity": bins, "messages_today": today,
             "hour": lt.tm_hour, "human": HUMAN}
 
@@ -1750,10 +1767,31 @@ def cmd_deck(conn, args):
         def do_POST(self):
             if not self._allowed():
                 return
-            if self.path.split("?")[0] != "/api/reply":
+            path = self.path.split("?")[0]
+            if path not in ("/api/reply", "/api/ack"):
                 return self._send(404, "not found", "text/plain")
             if not self._same_origin():
                 return self._send(403, json.dumps({"error": "cross-site request refused"}))
+            if path == "/api/ack":
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    data = json.loads(self.rfile.read(n) or b"{}")
+                    ticket = (data.get("ticket") or "").strip()[:40]
+                    if not TICKET_RE.fullmatch(ticket):
+                        return self._send(400, json.dumps({"error": "not a ticket key"}))
+                    c = connect()
+                    try:
+                        if data.get("undo"):
+                            c.execute("DELETE FROM acks WHERE ticket=?", (ticket,))
+                        else:
+                            c.execute("INSERT OR REPLACE INTO acks (ticket, until_at, at) VALUES (?,?,?)",
+                                      (ticket, float(data.get("until") or now()), now()))
+                        c.commit()
+                    finally:
+                        c.close()
+                    return self._send(200, json.dumps({"ok": True}))
+                except Exception as e:
+                    return self._send(500, json.dumps({"error": str(e)}))
             try:
                 n = int(self.headers.get("Content-Length", 0))
                 data = json.loads(self.rfile.read(n) or b"{}")
@@ -1788,6 +1826,10 @@ def cmd_deck(conn, args):
                         c.close()
                 time.sleep(int(_deck_conf().get("context_every", 600)))
         threading.Thread(target=_publisher, daemon=True).start()
+
+    if not os.environ.get("HALLWAY_NO_WATCHDOG"):
+        import threading
+        threading.Thread(target=_dispatcher_watchdog, daemon=True).start()
 
     srv = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     print("Hallway deck on http://%s:%d  (Ctrl+C to stop)" % (args.host, args.port))
@@ -1940,7 +1982,7 @@ def cmd_ledger(conn, args):
     handle = touch_agent(conn, ident)
     if args.action == "set":
         if not args.ticket:
-            raise SystemExit('Which ticket? e.g. `hallway ledger set EE-4236 --status "PR open" ...`')
+            raise SystemExit('Which ticket? e.g. `hallway ledger set PROJ-123 --status "PR open" ...`')
         ticket = args.ticket.strip()
         row = conn.execute("SELECT * FROM ledger WHERE ticket=? AND handle=?", (ticket, handle)).fetchone()
         vals = {f: (row[f] if row else None) for f in LEDGER_FIELDS}
@@ -2181,12 +2223,18 @@ def ledger_state(conn, gh=None, jira=None):
                 by_branch[b] = meta
     agents = {r["handle"]: r for r in conn.execute("SELECT handle, title, session_id FROM agents")}
 
+    groups = _sidebar_groups()
+    alias = conf.get("group_alias") or {}
+
     def session_of(handle):
         a = agents.get(handle)
         meta = titles.get(a["session_id"] or "") if a else None
         host = (meta or {}).get("host") or (live.get(handle) or {}).get("host")
+        cwd = (meta or {}).get("cwd") or (a and conn.execute("SELECT cwd FROM agents WHERE handle=?", (handle,)).fetchone()["cwd"]) or ""
+        g = groups.get(host or "")
         return {"handle": handle, "title": (a and a["title"]) or (meta or {}).get("title") or handle,
-                "host": host, "live": handle in live}
+                "host": host, "live": handle in live, "group": alias.get(g, g) if g else None,
+                "folder": cwd.split("/.claude/worktrees/")[0] if cwd else None}
 
     def find_pr(ref, pool=None):
         pool = prs if pool is None else pool
@@ -2251,6 +2299,7 @@ def ledger_state(conn, gh=None, jira=None):
                          {"handle": None, "title": meta.get("title"), "host": host, "live": False} if meta else None),
                      "source": "github"})
     issues, jira_at, jira_err = jira.snapshot() if jira else ({}, 0, None)
+    acked = {r["ticket"]: r["until_at"] for r in conn.execute("SELECT ticket, until_at FROM acks")}
     by_ticket = {}
     for r in rows:
         by_ticket.setdefault(r["ticket"], []).append(r)
@@ -2259,19 +2308,30 @@ def ledger_state(conn, gh=None, jira=None):
         if key in by_ticket:
             for r in by_ticket[key]:
                 r["jira"] = ji
-                if lc and lc["for_me"] and lc["at"] > (r.get("updated") or 0):
+                if lc and lc["for_me"] and lc["at"] > (r.get("updated") or 0) and lc["at"] > acked.get(key, 0):
                     r["jira_alert"] = "New Jira comment from %s, after this row was last updated" % lc["author"]
             continue
-        if lc and lc["for_me"] and t - lc["at"] < 7 * 86400:
+        if lc and lc["for_me"] and t - lc["at"] < 7 * 86400 and lc["at"] > acked.get(key, 0):
             rows.append({"ticket": key, "title": ji["summary"], "summary": "", "status": ji["status"],
                          "pr": "", "pr_live": None, "waiting_on": "you",
                          "need": "Reply to %s's comment on Jira: %s" % (lc["author"], lc["excerpt"]),
                          "updated": lc["at"], "session": None, "source": "jira", "jira": ji})
-        elif ji["assigned"] and ji["status"].lower() not in ("done", "closed"):
+        elif ji["assigned"] and ji["status"].lower() not in ("done", "closed") and key not in acked:
             rows.append({"ticket": key, "title": ji["summary"], "summary": "", "status": ji["status"],
                          "pr": "", "pr_live": None, "waiting_on": "nobody",
                          "need": "Assigned to you and in progress in Jira; no session is working on it",
                          "updated": 0, "session": None, "source": "jira", "jira": ji})
+    tp = conf.get("ticket_projects") or {}
+    folders = {k: os.path.expanduser(v) for k, v in (conf.get("project_folders") or {}).items()}
+    for r in rows:
+        sess = r.get("session") or {}
+        prefix = r["ticket"].split("-")[0] if TICKET_RE.fullmatch(r["ticket"] or "") else ""
+        repo = ((r.get("pr_live") or {}).get("repo") or "").split("/")[-1]
+        r["project"] = sess.get("group") or tp.get(prefix) or (_pretty_project(repo) if repo else "") or prefix or "Other"
+        if sess.get("folder") and r["project"] not in folders:
+            folders[r["project"]] = sess["folder"]
+    for r in rows:
+        r["folder"] = (r.get("session") or {}).get("folder") or folders.get(r["project"])
     return {"generated_at": t, "rows": rows, "approvers": approvers, "jira_url": jira_url,
             "jira_at": jira_at, "jira_error": jira_err,
             "people": {k.lower(): v for k, v in (conf.get("people") or {}).items()},
@@ -2466,7 +2526,7 @@ def render_context(state, owner="the user"):
     out.append("HOW TO USE THIS DOCUMENT")
     out.append("This is the current state of every ticket and pull request %s is working on, kept up to date "
                "automatically by %s's coding sessions. Use it to draft replies to emails, Jira notifications "
-               "and Slack messages about this work. Find the ticket key (for example EE-4236) or PR number "
+               "and Slack messages about this work. Find the ticket key (for example PROJ-123) or PR number "
                "mentioned in the incoming message, and ground the reply on that entry: what it is, its status, "
                "its pull request, who it is waiting on and what is needed. Rules: never claim something is "
                "merged, deployed or approved unless this document says so; if the document has no entry for a "
@@ -2614,6 +2674,102 @@ def cmd_context(conn, args):
         sys.stdout.write(render_context(ledger_state(conn, gh, jira), _deck_conf().get("owner_name", "the user")))
 
 
+def cmd_dispatch(conn, args):
+    """Block (no tokens) until the user has messaged a session that is asleep, then print
+    what to deliver and exit. A dispatcher session runs this in the background and delivers
+    each message with the desktop app's session messaging, which wakes the session; then it
+    runs this again. Sessions that are listening get their messages without it."""
+    grace = args.grace
+    deadline = now() + args.timeout if args.timeout else None
+    beat_path = os.path.join(ROOT, "dispatcher.json")
+
+    def beat(**extra):
+        rec = {"pid": os.getpid(), "handle": detect_identity(args.a_as)["handle"],
+               "host": os.environ.get("CLAUDE_CODE_HOST_SESSION_ID"), "beat": now()}
+        rec.update(extra)
+        try:
+            tmp = beat_path + ".tmp"
+            json.dump(rec, open(tmp, "w"))
+            os.replace(tmp, beat_path)
+        except OSError:
+            pass
+    beat(started=now())
+    while True:
+        beat()
+        titles = session_titles()
+        todo = []
+        for m in conn.execute("SELECT * FROM messages WHERE sender IN (%s) AND recipient IS NOT NULL"
+                              " AND ts > ? AND ts < ? ORDER BY ts" % ",".join("?" * len(HUMAN_HANDLES)),
+                              HUMAN_HANDLES + (now() - 86400, now() - grace)).fetchall():
+            h = m["recipient"]
+            if conn.execute("SELECT 1 FROM notified WHERE message_id=? AND handle=?", (m["id"], h)).fetchone() \
+                    or conn.execute("SELECT 1 FROM reads WHERE message_id=? AND handle=?", (m["id"], h)).fetchone():
+                continue
+            if _listening(h):
+                continue  # its own listener will pick it up
+            row = conn.execute("SELECT session_id FROM agents WHERE handle=?", (h,)).fetchone()
+            host = (titles.get((row["session_id"] if row else "") or "") or {}).get("host")
+            if not host:
+                continue
+            todo.append({"id": m["id"], "to": h, "session_id": host,
+                         "message": "%s %s" % (push_header(conn, m), m["body"] or "")})
+            conn.execute("INSERT OR IGNORE INTO notified (message_id, handle, at) VALUES (?,?,?)", (m["id"], h, now()))
+        if todo:
+            conn.commit()
+            beat(exited=now())
+            print(json.dumps({"deliver": todo}, indent=1))
+            print("Deliver each with mcp__ccd_session_mgmt__send_message (session_id and message exactly as given),"
+                  " then run `hallway dispatch` again in the background. Say nothing else.")
+            return
+        if deadline and now() > deadline:
+            print("Nothing to deliver. Run `hallway dispatch` again in the background.")
+            return
+        time.sleep(3)
+        conn.close()
+        conn = connect()
+
+
+def dispatcher_status():
+    """'listening', 'asleep' (it stopped and was not restarted), or 'none' (never set up)."""
+    try:
+        rec = json.load(open(os.path.join(ROOT, "dispatcher.json")))
+    except Exception:
+        return {"state": "none"}
+    alive = _pid_alive(int(rec.get("pid") or 0))
+    # Between deliveries the dispatcher exits and its session restarts it within seconds.
+    recent_exit = rec.get("exited") and now() - rec["exited"] < 180
+    state = "listening" if alive else ("restarting" if recent_exit else "asleep")
+    return {"state": state, "host": rec.get("host"), "since": rec.get("exited") or rec.get("beat")}
+
+
+def _notify(title, text, url=None):
+    import shutil, subprocess
+    try:
+        if shutil.which("terminal-notifier"):
+            cmd = ["terminal-notifier", "-title", title, "-message", text, "-group", "hallway-dispatcher"]
+            if url:
+                cmd += ["-open", url]
+            subprocess.run(cmd, timeout=10)
+        elif sys.platform == "darwin":
+            subprocess.run(["osascript", "-e", "display notification %s with title %s"
+                            % (json.dumps(text), json.dumps(title))], timeout=10)
+    except Exception:
+        pass
+
+
+def _dispatcher_watchdog():
+    """Tell the user, at most every 30 minutes, when the dispatcher has gone to sleep."""
+    last = 0
+    while True:
+        time.sleep(60)
+        st = dispatcher_status()
+        if st["state"] == "asleep" and now() - last > 1800:
+            last = now()
+            url = "claude://code/continue?session=%s" % st["host"] if st.get("host") else None
+            _notify("Hallway dispatcher is asleep",
+                    "Messages to sleeping sessions won't be delivered. Open the dispatcher session and send it 'resume'.", url)
+
+
 def cmd_hook_start(conn, args):
     """Plugin SessionStart hook: install the shim, then print recent unread mail and the
     roster of other running sessions (stdout becomes the session's startup context)."""
@@ -2748,6 +2904,10 @@ def main():
 
     s = add("wait", cmd_wait, "(hook) wake this session when you message it from the deck")
     s.add_argument("--timeout", type=int, default=6 * 3600)
+
+    s = add("dispatch", cmd_dispatch, "(dispatcher session) wait for messages to asleep sessions")
+    s.add_argument("--timeout", type=int, default=0, help="give up after N seconds (default: wait forever)")
+    s.add_argument("--grace", type=int, default=15, help="seconds to let a session's own listener answer first")
 
     s = add("relay", cmd_relay, "(old) deliver deck replies from one session; `wait` replaces this")
     s.add_argument("--timeout", type=int, default=3300)
