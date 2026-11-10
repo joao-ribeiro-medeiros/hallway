@@ -55,7 +55,7 @@ LC3=$(printf '{"session_id":"%s","cwd":"%s","prompt":"Another Claude session sen
 ok "a relayed peer message does not count as your ticket" '[ -z "$LC3" ]'
 ok "and not again straight away"              '[ -z "$LC2" ]'
 PORT=$((20000 + RANDOM % 20000))
-run env HALLWAY_NO_GITHUB=1 python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!
+run env HALLWAY_NO_GITHUB=1 HALLWAY_NO_JIRA=1 python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!
 for i in $(seq 1 30); do curl -s -o /dev/null "http://127.0.0.1:$PORT/api/deck" && break; sleep .2; done
 ok "deck serves the live state"               'curl -s "http://127.0.0.1:$PORT/api/deck" | grep -q "Should I open the pull request"'
 ok "the deck serves the ledger"               'curl -s "http://127.0.0.1:$PORT/api/ledger" | grep -q "\"waiting_on\": \"antonios\""'

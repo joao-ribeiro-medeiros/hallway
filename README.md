@@ -109,6 +109,12 @@ With `"context_doc": true` in `deck.json`, the deck keeps one Google Doc equal t
 replies to Jira notifications and emails with the real state of the work. It reuses an existing Google
 OAuth token with the Docs scope (`google_tokens`, `google_client` in `deck.json`).
 
+Add `"jira_sites": [{"name": "Work", "credentials_from_mcp": "mcp-atlassian"}]` to also pull Jira every
+5 minutes: tickets assigned to you that are in progress, and recent tickets whose latest comment is for
+you (it mentions you, or the ticket is yours) and unanswered. Those appear on the ledger even when no
+session knows about them, rows get a "new Jira comment" flag, and the context document quotes the
+latest comment. Credentials are read from that MCP server's settings at runtime, never copied.
+
 ### On your phone, through Tailscale
 
 The deck only listens on your Mac. [Tailscale](https://tailscale.com) can share it with your own devices

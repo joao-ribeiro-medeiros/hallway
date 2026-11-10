@@ -1620,6 +1620,8 @@ def cmd_deck(conn, args):
     here = os.path.dirname(os.path.abspath(__file__))
     page = os.path.join(here, "..", "web", "deck.html")
     gh = _GitHub() if not os.environ.get("HALLWAY_NO_GITHUB") else None
+    jsites = _deck_conf().get("jira_sites") or []
+    jira = _Jira(jsites) if jsites and not os.environ.get("HALLWAY_NO_JIRA") else None
     allowed = {u.strip().lower() for u in os.environ.get("HALLWAY_DECK_USERS", "").split(",") if u.strip()}
     if not allowed:
         allowed = _tailscale_owner()
@@ -1703,7 +1705,7 @@ def cmd_deck(conn, args):
             elif path == "/api/ledger":
                 c = connect()
                 try:
-                    self._send(200, json.dumps(ledger_state(c, gh)))
+                    self._send(200, json.dumps(ledger_state(c, gh, jira)))
                 finally:
                     c.close()
             elif path == "/api/deck":
@@ -1748,7 +1750,7 @@ def cmd_deck(conn, args):
                 c = None
                 try:
                     c = connect()
-                    print("context: %s" % publish_context(c, gh))
+                    print("context: %s" % publish_context(c, gh, jira))
                 except Exception as e:
                     print("context: failed (%s)" % e)
                 finally:
@@ -2027,14 +2029,98 @@ def _checked_out(cwd):
         return None
 
 
-def ledger_state(conn, gh=None):
+class _Jira:
+    """Tickets assigned to the user and recent Jira comments, refreshed in the background.
+
+    Credentials are read at runtime, never copied: either from an MCP server's env in
+    ~/.claude.json ("credentials_from_mcp": "mcp-atlassian") or from "url"/"user"/"token_env".
+    """
+
+    def __init__(self, sites, every=300):
+        import threading
+        self.sites, self.every = sites, every
+        self.issues, self.at, self.error = {}, 0, None
+        self.lock = threading.Lock()
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    @staticmethod
+    def _creds(site):
+        if site.get("credentials_from_mcp"):
+            d = json.load(open(os.path.expanduser("~/.claude.json")))
+            servers = dict(d.get("mcpServers", {}))
+            for proj in (d.get("projects") or {}).values():
+                servers.update(proj.get("mcpServers") or {})
+            env = (servers.get(site["credentials_from_mcp"]) or {}).get("env") or {}
+            return env.get("JIRA_URL"), env.get("JIRA_USERNAME"), env.get("JIRA_API_TOKEN")
+        return site.get("url"), site.get("user"), os.environ.get(site.get("token_env", ""), "")
+
+    def _loop(self):
+        while True:
+            try:
+                self.refresh()
+                self.error = None
+            except Exception as e:
+                self.error = str(e)[:200]
+            time.sleep(self.every)
+
+    def refresh(self):
+        import base64, urllib.request, urllib.parse
+        found = {}
+        for site in self.sites:
+            url, user, token = self._creds(site)
+            if not (url and user and token):
+                continue
+            auth = "Basic " + base64.b64encode(("%s:%s" % (user, token)).encode()).decode()
+
+            def get(path):
+                req = urllib.request.Request(url + path, headers={"Authorization": auth, "Accept": "application/json"})
+                return json.load(urllib.request.urlopen(req, timeout=30))
+            me = get("/rest/api/2/myself")["accountId"]
+
+            def search(jql, fields):
+                q = urllib.parse.urlencode({"jql": jql, "fields": fields, "maxResults": 100})
+                return get("/rest/api/2/search/jql?" + q).get("issues", [])
+            mine = search("assignee = currentUser() AND statusCategory = \"In Progress\" ORDER BY updated DESC",
+                          "summary,status,priority,assignee,comment")
+            recent = search("(watcher = currentUser() OR assignee = currentUser() OR reporter = currentUser())"
+                            " AND updated >= -7d ORDER BY updated DESC", "summary,status,priority,assignee,comment")
+            for i in mine + recent:
+                f = i["fields"]
+                cs = (f.get("comment") or {}).get("comments") or []
+                last = cs[-1] if cs else None
+                assigned = ((f.get("assignee") or {}).get("accountId") == me)
+                lc = None
+                if last:
+                    body = last.get("body") or ""
+                    text = re.sub(r"\[~accountid:[^\]]+\]", "@someone", body)
+                    text = re.sub(r"\{[a-z]+(:[^}]*)?\}|\[([^|\]]+)\|[^\]]+\]", lambda m: m.group(2) or "", text)
+                    by_me = (last.get("author") or {}).get("accountId") == me
+                    mentions = me in body
+                    lc = {"author": (last.get("author") or {}).get("displayName", "someone"),
+                          "at": _iso_ts(last.get("created")), "excerpt": _clean(text, 280),
+                          "by_me": by_me, "mentions_me": mentions,
+                          "for_me": (not by_me) and (mentions or assigned)}
+                found[i["key"]] = {"key": i["key"], "summary": f.get("summary") or "",
+                                   "status": (f.get("status") or {}).get("name", ""),
+                                   "priority": (f.get("priority") or {}).get("name", ""),
+                                   "url": "%s/browse/%s" % (url, i["key"]), "assigned": assigned,
+                                   "last_comment": lc, "site": site.get("name", url)}
+        with self.lock:
+            self.issues, self.at = found, now()
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.issues), self.at, self.error
+
+
+def ledger_state(conn, gh=None, jira=None):
     """Ledger rows from the sessions, joined with live PR state, plus open PRs nobody reported."""
     t = now()
     titles = session_titles()
     live = live_handles(conn)
     conf = _deck_conf()
     approvers = [a.lower() for a in conf.get("approvers", [])]
-    jira = conf.get("jira_url", "")
+    jira_url = conf.get("jira_url", "")
     prs, gh_at, gh_err = gh.snapshot() if gh else ({}, 0, "GitHub not checked")
     merged = gh.merged_snapshot() if gh else {}
     # Which session owns a PR: the desktop app records each session's latest PR number,
@@ -2119,7 +2205,30 @@ def ledger_state(conn, gh=None):
                      "session": session_of(handle) if handle else (
                          {"handle": None, "title": meta.get("title"), "host": host, "live": False} if meta else None),
                      "source": "github"})
-    return {"generated_at": t, "rows": rows, "approvers": approvers, "jira_url": jira,
+    issues, jira_at, jira_err = jira.snapshot() if jira else ({}, 0, None)
+    by_ticket = {}
+    for r in rows:
+        by_ticket.setdefault(r["ticket"], []).append(r)
+    for key, ji in issues.items():
+        lc = ji.get("last_comment")
+        if key in by_ticket:
+            for r in by_ticket[key]:
+                r["jira"] = ji
+                if lc and lc["for_me"] and lc["at"] > (r.get("updated") or 0):
+                    r["jira_alert"] = "New Jira comment from %s, after this row was last updated" % lc["author"]
+            continue
+        if lc and lc["for_me"] and t - lc["at"] < 7 * 86400:
+            rows.append({"ticket": key, "title": ji["summary"], "summary": "", "status": ji["status"],
+                         "pr": "", "pr_live": None, "waiting_on": "you",
+                         "need": "Reply to %s's comment on Jira: %s" % (lc["author"], lc["excerpt"]),
+                         "updated": lc["at"], "session": None, "source": "jira", "jira": ji})
+        elif ji["assigned"] and ji["status"].lower() not in ("done", "closed"):
+            rows.append({"ticket": key, "title": ji["summary"], "summary": "", "status": ji["status"],
+                         "pr": "", "pr_live": None, "waiting_on": "nobody",
+                         "need": "Assigned to you and in progress in Jira; no session is working on it",
+                         "updated": 0, "session": None, "source": "jira", "jira": ji})
+    return {"generated_at": t, "rows": rows, "approvers": approvers, "jira_url": jira_url,
+            "jira_at": jira_at, "jira_error": jira_err,
             "people": {k.lower(): v for k, v in (conf.get("people") or {}).items()},
             "github_at": gh_at, "github_error": gh_err}
 
@@ -2338,6 +2447,14 @@ def render_context(state, owner="the user"):
         out.append("  Waiting on: %s" % waiting(r))
         if r.get("need"):
             out.append("  Needed: %s" % r["need"])
+        ji = r.get("jira") or {}
+        lc = ji.get("last_comment")
+        if ji:
+            out.append("  Jira: %s, priority %s, %s" % (ji.get("status") or "?", ji.get("priority") or "?", ji.get("url", "")))
+        if lc and not lc.get("by_me"):
+            out.append("  Latest Jira comment: %s on %s%s: \"%s\"" % (
+                lc["author"], time.strftime("%Y-%m-%d %H:%M", time.localtime(lc["at"])),
+                " (mentions %s, not yet answered)" % owner if lc.get("for_me") else "", lc["excerpt"]))
         if r.get("updated"):
             out.append("  Updated: %s" % time.strftime("%Y-%m-%d %H:%M", time.localtime(r["updated"])))
         elif r["source"] == "github":
@@ -2396,13 +2513,13 @@ class _GoogleDoc:
         self._call("POST", "https://docs.googleapis.com/v1/documents/%s:batchUpdate" % doc_id, {"requests": reqs})
 
 
-def publish_context(conn, gh=None, force=False):
+def publish_context(conn, gh=None, jira=None, force=False):
     """Write the context to the configured Google Doc if it changed. Returns a short status."""
     import hashlib
     conf = _deck_conf()
     if not conf.get("context_doc") and not force:
         return "context publishing is off (set \"context_doc\": true in deck.json)"
-    text = render_context(ledger_state(conn, gh), conf.get("owner_name", "the user"))
+    text = render_context(ledger_state(conn, gh, jira), conf.get("owner_name", "the user"))
     body = re.sub(r"^Last changed: .*$", "", text, flags=re.M)
     digest = hashlib.sha256(body.encode()).hexdigest()
     state_path = os.path.join(ROOT, "context-state.json")
@@ -2433,14 +2550,23 @@ def cmd_context(conn, args):
             gh.refresh()
         except Exception as e:
             gh.error = str(e)
+    jira = None
+    if args.jira and _deck_conf().get("jira_sites"):
+        jira = _Jira.__new__(_Jira)
+        import threading
+        jira.sites, jira.lock, jira.issues, jira.at, jira.error = _deck_conf()["jira_sites"], threading.Lock(), {}, 0, None
+        try:
+            jira.refresh()
+        except Exception as e:
+            jira.error = str(e)
     if args.publish:
         try:
-            print(publish_context(conn, gh, force=True))
+            print(publish_context(conn, gh, jira, force=True))
         except Exception as e:
             raise SystemExit("Could not publish to Google Docs: %s. Set google_tokens / google_client in"
                              " ~/.claude/hallway/deck.json to an OAuth token with the Docs scope." % e)
     else:
-        sys.stdout.write(render_context(ledger_state(conn, gh), _deck_conf().get("owner_name", "the user")))
+        sys.stdout.write(render_context(ledger_state(conn, gh, jira), _deck_conf().get("owner_name", "the user")))
 
 
 def cmd_hook_start(conn, args):
@@ -2569,6 +2695,7 @@ def main():
     s = add("context", cmd_context, "the ledger as a document for an AI assistant (--publish to the Google Doc)")
     s.add_argument("--publish", action="store_true", help="write it to the Google Doc now")
     s.add_argument("--github", action="store_true", help="include live PR state from GitHub (slower)")
+    s.add_argument("--jira", action="store_true", help="include Jira tickets and comments (needs jira_sites)")
 
     s = add("deck", cmd_deck, "serve the live deck (localhost; see README for phones)")
     s.add_argument("--port", type=int, default=5055)

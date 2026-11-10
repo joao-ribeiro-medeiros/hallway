@@ -830,9 +830,9 @@ function renderLedger() {
       const id = r.ticket + "|" + (r.pr || "") + "|" + (r.session ? r.session.handle : ""), ts = lSince(r);
       const old = ts && Date.now() / 1000 - ts > 86400 && ["you", "approver", "review"].includes(r.b);
       const tr = document.createElement("tr"); tr.className = "row" + (lOpen === id ? " open" : "");
-      tr.innerHTML = `<td><div class="lkey${ticketish(r.ticket) ? "" : " none"}">${esc(r.ticket)}</div><span class="lfrom">${r.session ? esc(r.session.title) : r.source === "github" ? "from GitHub, no session" : ""}</span></td>
+      tr.innerHTML = `<td><div class="lkey${ticketish(r.ticket) ? "" : " none"}">${esc(r.ticket)}</div><span class="lfrom">${r.session ? esc(r.session.title) : r.source === "github" ? "from GitHub, no session" : r.source === "jira" ? "from Jira, no session" : ""}</span></td>
         <td class="lsum"><b>${esc(r.title || r.ticket)}</b>${r.summary ? `<span>${esc(short(r.summary, 200))}</span>` : ""}</td>
-        <td><span class="lst" style="--sc:${STCOL(r.status)}">${esc((r.status || "—").toUpperCase())}</span>${r.outdated ? `<span class="lout" title="${esc(r.outdated)}">⚠ ROW OUTDATED</span>` : ""}</td>
+        <td><span class="lst" style="--sc:${STCOL(r.status)}">${esc((r.status || "—").toUpperCase())}</span>${r.outdated ? `<span class="lout" title="${esc(r.outdated)}">⚠ ROW OUTDATED</span>` : ""}${r.jira_alert ? `<span class="lout" style="color:var(--amber)" title="${esc(r.jira_alert)}">💬 NEW JIRA COMMENT</span>` : ""}</td>
         <td class="lpr">${prCell(r)}</td><td>${whoCell(r)}</td>
         <td class="lsince${old ? " old" : ""}">${ts ? ago(ts) : ""}</td>`;
       tr.onclick = () => { lOpen = lOpen === id ? null : id; renderLedger(); };
@@ -845,10 +845,11 @@ function renderLedger() {
             ${r.need ? `<h4>WHAT'S NEEDED${r.waiting_on ? " FROM " + esc(personName(r.waiting_on).toUpperCase()) : ""}</h4><p class="q">${esc(r.need)}</p>` : ""}
             ${r.pr_live ? `<h4>PULL REQUEST</h4><p>${esc(r.pr_live.title)}${r.pr_live.reviewers.length ? "<br>Review requested from " + esc(r.pr_live.reviewers.join(", ")) : ""}${r.pr_live.mergeable === "conflicting" ? "<br><b style='color:var(--red)'>Merge conflict</b>" : ""}</p>` : ""}
             ${r.outdated ? `<h4 style="color:var(--red)">OUTDATED</h4><p>The ledger says "${esc(r.status)}", but ${esc(r.outdated)}. The session will be reminded the next time it works on it.</p>` : ""}
+            ${r.jira && r.jira.last_comment && !r.jira.last_comment.by_me ? `<h4 style="color:${r.jira.last_comment.for_me ? "var(--amber)" : "var(--dim)"}">LATEST JIRA COMMENT · ${esc(r.jira.last_comment.author.toUpperCase())}${r.jira.last_comment.for_me ? " · FOR YOU" : ""}</h4><p>${esc(r.jira.last_comment.excerpt)}</p>` : ""}
             <h4>LAST UPDATED</h4><p>${r.updated ? new Date(r.updated * 1000).toLocaleString() + " by the session" : "Not reported by a session yet; this row comes from GitHub."}</p></div>
           <div class="lacts">${sess && sess.host && !document.body.classList.contains("phone") ? `<a class="fb p" href="claude://claude.ai/epitaxy/${esc(sess.host)}">Open the session</a>` : ""}
             ${sess && sess.handle ? `<button class="fb" data-msg>Message the session</button>` : ""}
-            ${jira ? `<a class="fb" target="_blank" href="${esc(jira)}">Open ${esc(r.ticket)} in Jira</a>` : ""}
+            ${(r.jira && r.jira.url) || jira ? `<a class="fb" target="_blank" href="${esc((r.jira && r.jira.url) || jira)}">Open ${esc(r.ticket)} in Jira</a>` : ""}
             ${r.pr_live ? `<a class="fb" target="_blank" href="${esc(r.pr_live.url)}">Open PR #${r.pr_live.number}</a>` : ""}</div></div></td>`;
         const mb = tr2.querySelector("[data-msg]");
         if (mb) mb.onclick = e => { e.stopPropagation(); const s = (S && S.sessions.find(x => x.handle === sess.handle)) ||
@@ -858,7 +859,8 @@ function renderLedger() {
     }
   }
   const gh = L.github_error ? `GitHub: ${esc(L.github_error)}` : L.github_at ? `GitHub checked ${ago(L.github_at)} ago` : "Checking GitHub…";
-  $("#lfoot").innerHTML = `${rows.filter(r => r.source === "session").length} rows from sessions, ${rows.filter(r => r.source === "github").length} open PRs no session has reported yet. ${gh}.`;
+  const jr = L.jira_error ? ` Jira: ${esc(L.jira_error)}.` : L.jira_at ? ` Jira checked ${ago(L.jira_at)} ago.` : "";
+  $("#lfoot").innerHTML = `${rows.filter(r => r.source === "session").length} rows from sessions, ${rows.filter(r => r.source === "github").length} open PRs and ${rows.filter(r => r.source === "jira").length} Jira tickets no session has reported. ${gh}.${jr}`;
 }
 function toast(t) { const e = $("#ltoast"); e.textContent = t; e.style.display = "block"; clearTimeout(e._t); e._t = setTimeout(() => e.style.display = "none", 2600); }
 $("#lq").oninput = e => { lQ = e.target.value; renderLedger(); };
