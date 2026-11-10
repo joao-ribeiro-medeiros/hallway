@@ -72,11 +72,11 @@ Your user reads the Ledger to see every ticket at a glance instead of opening ea
 you start on a ticket and at each milestone (PR opened, review requested, approved, merged, deployed,
 In Test, blocked, waiting on someone, done), run one line:
 ```bash
-hallway ledger set EE-4236 --title "few words" --summary "1-2 plain lines" --status "PR open" \
-  --pr 6095 --waiting-on <you|a person's name|ci|release|nobody> --need "the exact question for them"
+hallway ledger set PROJ-123 --title "few words" --summary "1-2 plain lines" --status "PR open" \
+  --pr 482 --waiting-on <you|a person's name|ci|release|nobody> --need "the exact question for them"
 ```
 Only the fields you pass change. Use `--waiting-on you` only for a decision that is genuinely your
-user's. When it is finished: `hallway ledger set EE-4236 --done`.
+user's. When it is finished: `hallway ledger set PROJ-123 --done`.
 
 ## Messages from the deck
 Your user can write to you from the Hallway deck (on their Mac or phone). A background hook wakes you

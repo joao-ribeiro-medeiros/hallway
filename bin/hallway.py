@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS acks (
     at       REAL
 );
 CREATE TABLE IF NOT EXISTS ledger (
-    ticket      TEXT NOT NULL,   -- EE-4236, or a short label when there is no ticket
+    ticket      TEXT NOT NULL,   -- PROJ-123, or a short label when there is no ticket
     handle      TEXT NOT NULL,   -- the session that owns this row
     title       TEXT,            -- what it is, a few words
     summary     TEXT,            -- one or two lines
@@ -600,7 +600,16 @@ def mark_read(conn, handle, ids):
     conn.commit()
 
 
-HUMAN_HANDLES = ("you", "soma", "user")
+def _human_handles():
+    """Senders that are the user, not an agent: the deck's own, plus any listed in deck.json."""
+    try:
+        extra = json.load(open(os.path.join(ROOT, "deck.json"))).get("human_handles") or []
+    except Exception:
+        extra = []
+    return tuple(["you", "user"] + [str(h) for h in extra])
+
+
+HUMAN_HANDLES = _human_handles()
 
 
 def sender_label(conn, handle):
@@ -945,7 +954,7 @@ def cmd_watch(conn, args):
 def search(conn, q, limit=60):
     """Find messages by their words, or by who wrote them."""
     like = "%" + q + "%"
-    # Sessions whose name matches, so searching "EE-3619" finds what it wrote.
+    # Sessions whose name matches, so searching "PROJ-123" finds what it wrote.
     handles = [r["handle"] for r in conn.execute(
         "SELECT handle FROM agents WHERE title LIKE ?1 OR role LIKE ?1 OR handle LIKE ?1", (like,))]
     handles += [r["handle"] for r in conn.execute(
@@ -1489,7 +1498,9 @@ def _sidebar_groups():
 
 
 def _pretty_project(name):
-    name = re.sub(r"^(ignitetech-|igt-)", "", name or "")
+    for prefix in _deck_conf().get("project_prefixes") or []:   # e.g. ["acme-"] to show "billing" not "acme-billing"
+        if (name or "").startswith(prefix):
+            name = name[len(prefix):]
     name = re.sub(r"-(ai|app|repo)$", "", name)
     return name.replace("-", " ").title() if name else "Other"
 
@@ -1921,7 +1932,7 @@ def cmd_ledger(conn, args):
     handle = touch_agent(conn, ident)
     if args.action == "set":
         if not args.ticket:
-            raise SystemExit('Which ticket? e.g. `hallway ledger set EE-4236 --status "PR open" ...`')
+            raise SystemExit('Which ticket? e.g. `hallway ledger set PROJ-123 --status "PR open" ...`')
         ticket = args.ticket.strip()
         row = conn.execute("SELECT * FROM ledger WHERE ticket=? AND handle=?", (ticket, handle)).fetchone()
         vals = {f: (row[f] if row else None) for f in LEDGER_FIELDS}
@@ -2448,7 +2459,7 @@ def render_context(state, owner="the user"):
     out.append("HOW TO USE THIS DOCUMENT")
     out.append("This is the current state of every ticket and pull request %s is working on, kept up to date "
                "automatically by %s's coding sessions. Use it to draft replies to emails, Jira notifications "
-               "and Slack messages about this work. Find the ticket key (for example EE-4236) or PR number "
+               "and Slack messages about this work. Find the ticket key (for example PROJ-123) or PR number "
                "mentioned in the incoming message, and ground the reply on that entry: what it is, its status, "
                "its pull request, who it is waiting on and what is needed. Rules: never claim something is "
                "merged, deployed or approved unless this document says so; if the document has no entry for a "

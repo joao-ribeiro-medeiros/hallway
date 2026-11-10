@@ -1,6 +1,6 @@
 {
   "name": "hallway",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "A shared message board for the Claude Code sessions on your machine. Every session sees who else is running and what they are doing, and can ask, answer and hand off to the others.",
   "author": { "name": "soma" },
   "license": "MIT"
