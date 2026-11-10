@@ -83,5 +83,8 @@ ok "a usage error exits 1, never the wake-up code 2" 'run python3 "$BIN" nosuchc
 mkdir -p "$T/.local/bin"; printf '#!/bin/sh\nexec python3 "/x/hallway/hallway/9.9.9/bin/hallway.py" "$@"\n' > "$T/.local/bin/hallway"
 printf '{"session_id":"%s","cwd":"%s"}' $SB "$T/work/payments" | run python3 "$BIN" hook-start >/dev/null 2>&1
 ok "an older copy never repoints a newer shim" 'grep -q "9.9.9" "$T/.local/bin/hallway"'
+CTX=$(C $SB context)
+ok "the work context lists ledger rows for an AI to read" 'echo "$CTX" | grep -q "^EE-1234: Promo field" && echo "$CTX" | grep -q "Needed: OK for the release?"'
+ok "publishing is off unless configured"     'C $SB context --publish 2>&1 | grep -q -i "published\|off\|Errno\|No such file" '
 ok "all data stays inside the test HOME"      '[ -f "$T/.claude/hallway/hallway.db" ]'
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]

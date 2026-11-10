@@ -1739,6 +1739,24 @@ def cmd_deck(conn, args):
             except Exception as e:
                 self._send(500, json.dumps({"error": str(e)}))
 
+    if _deck_conf().get("context_doc"):
+        import threading
+
+        def _publisher():
+            time.sleep(90)  # let the first GitHub refresh land
+            while True:
+                c = None
+                try:
+                    c = connect()
+                    print("context: %s" % publish_context(c, gh))
+                except Exception as e:
+                    print("context: failed (%s)" % e)
+                finally:
+                    if c:
+                        c.close()
+                time.sleep(int(_deck_conf().get("context_every", 600)))
+        threading.Thread(target=_publisher, daemon=True).start()
+
     srv = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     print("Hallway deck on http://%s:%d  (Ctrl+C to stop)" % (args.host, args.port))
     try:
@@ -2254,6 +2272,177 @@ def cmd_ledger_check(conn, args):
              "--waiting-on ... --need ...` so your user sees where it stands (or `--done` if it is finished)." % "; ".join(bits))
 
 
+# ------------------------------------------------------------------ work context
+# `hallway context` writes the ledger as a plain document an AI assistant can ground
+# on (for example an email assistant drafting replies to Jira notifications), and
+# can keep one Google Doc up to date with it. The deck republishes it every few
+# minutes, only when the content changed, so the Doc's revision moves only when the
+# work did.
+
+CONTEXT_NOTES = os.path.join(ROOT, "context-notes.md")
+_WAITING_LABEL = {"you": "the user", "ci": "CI / automated checks", "release": "the next release",
+                  "nobody": "nobody (moving)", "session": "the session (changes requested)", "review": "a reviewer"}
+
+
+def render_context(state, owner="the user"):
+    """The ledger as a stable, AI-friendly plain-text document."""
+    rows = [r for r in state["rows"] if not (r["source"] == "github" and r.get("pr_live")
+            and now() - _iso_ts(r["pr_live"].get("updated")) > 45 * 86400)]
+    def waiting(r):
+        w = (r.get("waiting_on") or "").lower()
+        return _WAITING_LABEL.get(w, w.split("-")[0].title() if w else "nobody")
+    def pr_line(r):
+        p = r.get("pr_live")
+        if p:
+            bits = ["merged" if p.get("merged") else "open"]
+            if p.get("draft"):
+                bits.append("draft")
+            if p.get("ci"):
+                bits.append("CI " + p["ci"])
+            if p.get("review"):
+                bits.append(p["review"].replace("_", " ").lower())
+            return "#%s in %s (%s) %s" % (p["number"], p["repo"], ", ".join(bits), p.get("url", ""))
+        return ("#" + str(r["pr"]).split("#")[-1]) if r.get("pr") else "none"
+    order = {"you": 0}
+    rows.sort(key=lambda r: (order.get((r.get("waiting_on") or "").lower(), 1),
+                             (r.get("status") or "").lower() == "done", r["ticket"]))
+    out = []
+    out.append("%s's live work context (from Hallway)" % owner)
+    out.append("")
+    out.append("HOW TO USE THIS DOCUMENT")
+    out.append("This is the current state of every ticket and pull request %s is working on, kept up to date "
+               "automatically by %s's coding sessions. Use it to draft replies to emails, Jira notifications "
+               "and Slack messages about this work. Find the ticket key (for example EE-4236) or PR number "
+               "mentioned in the incoming message, and ground the reply on that entry: what it is, its status, "
+               "its pull request, who it is waiting on and what is needed. Rules: never claim something is "
+               "merged, deployed or approved unless this document says so; if the document has no entry for a "
+               "ticket, say %s will check rather than guessing; drafts only, never commitments on %s's behalf "
+               "beyond what is written here." % (owner, owner, owner, owner))
+    out.append("Last changed: %s" % time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(
+        max([r.get("updated") or 0 for r in rows] + [state.get("github_at") or 0]))))
+    try:
+        notes = open(CONTEXT_NOTES).read().strip()
+    except OSError:
+        notes = ""
+    if notes:
+        out += ["", "STANDING RULES AND PEOPLE", notes]
+    out += ["", "TICKETS AND PULL REQUESTS (%d)" % len(rows)]
+    for r in rows:
+        out.append("")
+        out.append("%s: %s" % (r["ticket"], r.get("title") or "(no title)"))
+        out.append("  Status: %s%s" % (r.get("status") or "unknown",
+                                        "  (warning: %s)" % r["outdated"] if r.get("outdated") else ""))
+        if r.get("summary"):
+            out.append("  What it is: %s" % r["summary"])
+        out.append("  Pull request: %s" % pr_line(r))
+        out.append("  Waiting on: %s" % waiting(r))
+        if r.get("need"):
+            out.append("  Needed: %s" % r["need"])
+        if r.get("updated"):
+            out.append("  Updated: %s" % time.strftime("%Y-%m-%d %H:%M", time.localtime(r["updated"])))
+        elif r["source"] == "github":
+            out.append("  Source: GitHub only; no session has described it yet")
+    return "\n".join(out) + "\n"
+
+
+def _iso_ts(s):
+    try:
+        return time.mktime(time.strptime((s or "")[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+    except Exception:
+        return now()
+
+
+class _GoogleDoc:
+    """Keeps one Google Doc's text equal to a given string, using an existing OAuth token."""
+
+    def __init__(self, conf):
+        self.tokens = os.path.expanduser(conf.get("google_tokens", "~/.config/google-drive-mcp/tokens.json"))
+        self.client = os.path.expanduser(conf.get("google_client", "~/.gmail-mcp/gcp-oauth.keys.json"))
+        self.access, self.expires = None, 0
+
+    def _token(self):
+        import urllib.request, urllib.parse
+        if self.access and now() < self.expires - 60:
+            return self.access
+        acct = json.load(open(self.tokens))
+        acct = acct["accounts"][acct.get("defaultAccount") or "default"] if "accounts" in acct else acct
+        cl = json.load(open(self.client))
+        cl = cl.get("installed") or cl.get("web") or cl
+        data = urllib.parse.urlencode({"client_id": cl["client_id"], "client_secret": cl["client_secret"],
+                                       "refresh_token": acct.get("refreshToken") or acct.get("refresh_token"),
+                                       "grant_type": "refresh_token"}).encode()
+        r = json.load(urllib.request.urlopen(urllib.request.Request(
+            cl.get("token_uri", "https://oauth2.googleapis.com/token"), data=data), timeout=30))
+        self.access, self.expires = r["access_token"], now() + int(r.get("expires_in", 3600))
+        return self.access
+
+    def _call(self, method, url, body=None):
+        import urllib.request
+        req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Authorization": "Bearer " + self._token(),
+                                              "Content-Type": "application/json"})
+        return json.load(urllib.request.urlopen(req, timeout=60))
+
+    def create(self, title):
+        return self._call("POST", "https://docs.googleapis.com/v1/documents", {"title": title})["documentId"]
+
+    def replace(self, doc_id, text):
+        doc = self._call("GET", "https://docs.googleapis.com/v1/documents/%s?fields=body(content(endIndex))" % doc_id)
+        end = max([c.get("endIndex", 1) for c in doc.get("body", {}).get("content", [])] + [1])
+        reqs = []
+        if end > 2:
+            reqs.append({"deleteContentRange": {"range": {"startIndex": 1, "endIndex": end - 1}}})
+        reqs.append({"insertText": {"location": {"index": 1}, "text": text}})
+        self._call("POST", "https://docs.googleapis.com/v1/documents/%s:batchUpdate" % doc_id, {"requests": reqs})
+
+
+def publish_context(conn, gh=None, force=False):
+    """Write the context to the configured Google Doc if it changed. Returns a short status."""
+    import hashlib
+    conf = _deck_conf()
+    if not conf.get("context_doc") and not force:
+        return "context publishing is off (set \"context_doc\": true in deck.json)"
+    text = render_context(ledger_state(conn, gh), conf.get("owner_name", "the user"))
+    body = re.sub(r"^Last changed: .*$", "", text, flags=re.M)
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    state_path = os.path.join(ROOT, "context-state.json")
+    try:
+        st = json.load(open(state_path))
+    except Exception:
+        st = {}
+    if st.get("digest") == digest and st.get("doc_id") and not force:
+        return "unchanged"
+    g = _GoogleDoc(conf)
+    doc_id = conf.get("context_doc_id") or st.get("doc_id")
+    if not doc_id:
+        doc_id = g.create(conf.get("context_doc_title", "Hallway: live work context"))
+    g.replace(doc_id, text)
+    st.update({"digest": digest, "doc_id": doc_id, "published": now()})
+    json.dump(st, open(state_path, "w"))
+    return "published https://docs.google.com/document/d/%s/edit" % doc_id
+
+
+def cmd_context(conn, args):
+    """Print the work context, or publish it to the Google Doc (--publish)."""
+    gh = None
+    if args.github:
+        gh = _GitHub.__new__(_GitHub)
+        import threading
+        gh.lock, gh.prs, gh.merged, gh.at, gh.error = threading.Lock(), {}, {}, 0, None
+        try:
+            gh.refresh()
+        except Exception as e:
+            gh.error = str(e)
+    if args.publish:
+        try:
+            print(publish_context(conn, gh, force=True))
+        except Exception as e:
+            raise SystemExit("Could not publish to Google Docs: %s. Set google_tokens / google_client in"
+                             " ~/.claude/hallway/deck.json to an OAuth token with the Docs scope." % e)
+    else:
+        sys.stdout.write(render_context(ledger_state(conn, gh), _deck_conf().get("owner_name", "the user")))
+
+
 def cmd_hook_start(conn, args):
     """Plugin SessionStart hook: install the shim, then print recent unread mail and the
     roster of other running sessions (stdout becomes the session's startup context)."""
@@ -2376,6 +2565,10 @@ def main():
 
     s = add("milestone", cmd_milestone, "(hook) remind a session to update its ledger row after a milestone")
     s = add("ledger-check", cmd_ledger_check, "(hook) nudge a session whose ledger row is missing or old")
+
+    s = add("context", cmd_context, "the ledger as a document for an AI assistant (--publish to the Google Doc)")
+    s.add_argument("--publish", action="store_true", help="write it to the Google Doc now")
+    s.add_argument("--github", action="store_true", help="include live PR state from GitHub (slower)")
 
     s = add("deck", cmd_deck, "serve the live deck (localhost; see README for phones)")
     s.add_argument("--port", type=int, default=5055)

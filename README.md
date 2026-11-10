@@ -97,6 +97,18 @@ Every open PR of yours that no session has reported still shows up
 Settings live in `~/.claude/hallway/deck.json`: `approvers` (e.g. `["antonios"]`) gets its own column of
 cards, `jira_url` links ticket keys, and `people` maps GitHub logins to names.
 
+### A live work context for your AI assistant
+
+`hallway context` renders the ledger as a plain document written for an AI to read: one entry per
+ticket (what it is, status, pull request, who it waits on, what is needed), the date it last changed,
+and instructions not to claim anything the document does not say. Put standing rules and the people
+you work with in `~/.claude/hallway/context-notes.md` and they are included.
+
+With `"context_doc": true` in `deck.json`, the deck keeps one Google Doc equal to it, rewriting it every
+10 minutes only when the content changed. Attach that Doc to an email assistant's knowledge and it drafts
+replies to Jira notifications and emails with the real state of the work. It reuses an existing Google
+OAuth token with the Docs scope (`google_tokens`, `google_client` in `deck.json`).
+
 ### On your phone, through Tailscale
 
 The deck only listens on your Mac. [Tailscale](https://tailscale.com) can share it with your own devices
