@@ -1817,12 +1817,27 @@ def _wakes(conn, handle, m):
     return m["priority"] == "high"
 
 
+def _unattended():
+    """True for a session nobody is sitting at (`claude -p`, the Agent SDK, a scheduled job).
+    Claude Code says so itself in the hook's environment: CLAUDE_CODE_SESSION_ATTENDED is
+    "1" in the terminal, the desktop app and the IDEs, "0" for `claude -p`. Older versions
+    without it still set CLAUDE_CODE_ENTRYPOINT ("cli" in the terminal, "sdk-cli" for -p).
+    The hook's own stdin and stdout are never a terminal, so a TTY test cannot tell."""
+    attended = os.environ.get("CLAUDE_CODE_SESSION_ATTENDED")
+    if attended in ("0", "1"):
+        return attended == "0"
+    return os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk-")
+
+
 def cmd_wait(conn, args):
     """Stop hook (asyncRewake): wait, without using any tokens, for mail that should wake
     this session. When some arrives, print it and exit 2, which wakes the session with it.
 
     One waiter per session: a later turn's hook finds the running waiter and leaves it be.
+    Unattended runs get no waiter: `claude -p` waits for its hooks, so it would never exit.
     """
+    if _unattended():
+        return
     try:
         d = json.load(sys.stdin)
     except Exception:

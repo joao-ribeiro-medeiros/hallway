@@ -11,7 +11,8 @@ sleep 300 & PA=$!; sleep 300 & PB=$!
 SA=aaaaaaaa-1111-2222-3333-444444444444; SB=bbbbbbbb-1111-2222-3333-444444444444
 printf '{"pid":%s,"sessionId":"%s","cwd":"%s","name":"a"}' $PA $SA "$T/work/checkout" > "$T/.claude/sessions/$PA.json"
 printf '{"pid":%s,"sessionId":"%s","cwd":"%s","name":"b"}' $PB $SB "$T/work/payments" > "$T/.claude/sessions/$PB.json"
-run(){ env -u CLAUDE_CODE_HOST_SESSION_ID HOME="$T" "$@"; }
+run(){ env -u CLAUDE_CODE_HOST_SESSION_ID -u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_SESSION_ATTENDED \
+  -u CLAUDE_CODE_ENTRYPOINT -u HALLWAY_SESSIONS_DIR HOME="$T" "$@"; }
 C(){ local sid=$1; shift; run CLAUDE_CODE_SESSION_ID=$sid python3 "$BIN" "$@"; }
 note(){ python3 -c "import json,sys;print(json.dumps({'session_id':sys.argv[1],'cwd':sys.argv[2],'prompt':sys.argv[3]}))" "$1" "$2" "$3" | run $4 python3 "$BIN" note; }
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "PASS  $1"; else FAIL=$((FAIL+1)); echo "FAIL  $1"; fi; }
@@ -79,6 +80,14 @@ ok "only one waiter runs per session"        'printf "{\"session_id\":\"%s\",\"c
 C $SB --as you send s-aaaaaaaa -s "from the deck" -m "Ship it after lunch." >/dev/null
 wait $W
 ok "your message wakes it (exit 2) with a clear sender" '[ "$(cat "$T/wait.rc")" = 2 ] && grep -q "\[Hallway\] From your user: Ship it after lunch." "$T/wait.out"'
+# `claude -p` waits for its hooks, so an unattended session must get no waiter at all
+quick(){ local t0=$SECONDS; printf '{"session_id":"%s","cwd":"%s"}' $SA "$T/work/checkout" \
+  | run "$@" python3 "$BIN" wait --timeout 20 >/dev/null 2>&1; [ $? = 0 ] && [ $((SECONDS - t0)) -lt 5 ]; }
+ok "claude -p (unattended) gets no waiter"   'quick CLAUDE_CODE_SESSION_ATTENDED=0'
+ok "older Claude Code: sdk-cli gets no waiter" 'quick CLAUDE_CODE_ENTRYPOINT=sdk-cli'
+slow(){ local t0=$SECONDS; printf '{"session_id":"%s","cwd":"%s"}' $SA "$T/work/checkout" \
+  | run "$@" python3 "$BIN" wait --timeout 3 >/dev/null 2>&1; [ $((SECONDS - t0)) -ge 2 ]; }
+ok "an attended session keeps its waiter"    'slow CLAUDE_CODE_SESSION_ATTENDED=1 CLAUDE_CODE_ENTRYPOINT=sdk-cli'
 ok "a usage error exits 1, never the wake-up code 2" 'run python3 "$BIN" nosuchcommand >/dev/null 2>&1; [ $? = 1 ]'
 mkdir -p "$T/.local/bin"; printf '#!/bin/sh\nexec python3 "/x/hallway/hallway/9.9.9/bin/hallway.py" "$@"\n' > "$T/.local/bin/hallway"
 printf '{"session_id":"%s","cwd":"%s"}' $SB "$T/work/payments" | run python3 "$BIN" hook-start >/dev/null 2>&1
