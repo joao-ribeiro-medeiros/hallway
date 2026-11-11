@@ -3,7 +3,7 @@
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; BIN="$HERE/bin/hallway.py"
 T=$(mktemp -d); PASS=0; FAIL=0
-trap 'kill $PA $PB 2>/dev/null; wait $PA $PB 2>/dev/null; rm -rf "$T"' EXIT
+trap 'kill $PA $PB ${PX:-} ${PY:-} 2>/dev/null; wait $PA $PB 2>/dev/null; rm -rf "$T"' EXIT
 mkdir -p "$T/.claude/sessions" "$T/work/checkout/.git" "$T/work/payments/.git"
 echo "ref: refs/heads/claude/checkout-redesign" > "$T/work/checkout/.git/HEAD"
 echo "ref: refs/heads/claude/flaky-payment-test" > "$T/work/payments/.git/HEAD"
@@ -55,10 +55,17 @@ LC2=$(printf '{"session_id":"%s","cwd":"%s","prompt":"look at PROJ-88 please"}' 
 LC3=$(printf '{"session_id":"%s","cwd":"%s","prompt":"Another Claude session sent a message: PROJ-99 is done"}' $SA "$T/work/checkout" | run python3 "$BIN" ledger-check)
 ok "a relayed peer message does not count as your ticket" '[ -z "$LC3" ]'
 ok "and not again straight away"              '[ -z "$LC2" ]'
+# Two plain terminal sessions in folders that are not git checkouts: no branch, no desktop title
+SD=dddddddd-1111-2222-3333-444444444444; SE=eeeeeeee-1111-2222-3333-444444444444
+mkdir -p "$T/plain1" "$T/plain2"; sleep 300 & PX=$!; sleep 300 & PY=$!
+printf '{"pid":%s,"sessionId":"%s","cwd":"%s","name":"d"}' $PX $SD "$T/plain1" > "$T/.claude/sessions/$PX.json"
+printf '{"pid":%s,"sessionId":"%s","cwd":"%s","name":"e"}' $PY $SE "$T/plain2" > "$T/.claude/sessions/$PY.json"
+note $SD "$T/plain1" "Tidy the release notes" "env X=1"; note $SE "$T/plain2" "Check the nightly backup" "env X=1"
 PORT=$((20000 + RANDOM % 20000))
 run env HALLWAY_NO_GITHUB=1 HALLWAY_NO_JIRA=1 HALLWAY_NO_WATCHDOG=1 python3 "$BIN" deck --port $PORT >/dev/null 2>&1 & PD=$!
 for i in $(seq 1 30); do curl -s -o /dev/null "http://127.0.0.1:$PORT/api/deck" && break; sleep .2; done
 ok "deck serves the live state"               'curl -s "http://127.0.0.1:$PORT/api/deck" | grep -q "Should I open the pull request"'
+ok "deck shows every untitled terminal session, not one" 'D=$(curl -s "http://127.0.0.1:$PORT/api/deck"); echo "$D" | grep -q "s-dddddddd" && echo "$D" | grep -q "s-eeeeeeee"'
 ok "the deck serves the ledger"               'curl -s "http://127.0.0.1:$PORT/api/ledger" | grep -q "\"waiting_on\": \"alex\""'
 ok "deck refuses another Tailscale user"      '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Tailscale-User-Login: someone@else.com" "http://127.0.0.1:$PORT/api/deck")" = 403 ]'
 ok "a reply from the deck is stored"          'curl -s -X POST -H "Content-Type: application/json" -d "{\"handle\":\"s-aaaaaaaa\",\"text\":\"Yes, open it.\"}" "http://127.0.0.1:$PORT/api/reply" | grep -q "\"id\""'

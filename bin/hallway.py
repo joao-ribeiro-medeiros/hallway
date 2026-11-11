@@ -1601,10 +1601,18 @@ def deck_state(conn):
     # show it once, as its most recent self.
     seen, merged = {}, []
     for x in sorted(sessions, key=lambda x: (x["live"], x["active"]), reverse=True):
-        key = x["host"] or x["title"]
-        if key in seen or x["title"] in seen:
+        # Only a desktop session (it has a host id) can own several CLI sessions. A plain CLI
+        # session has no host and usually no title ("Untitled session"), so keying it by title
+        # collapsed every untitled terminal session into one card. Key those by handle instead.
+        if x["host"]:
+            key, tkey = x["host"], x["title"]
+        else:
+            key, tkey = x["handle"], None
+        if key in seen or (tkey and tkey in seen):
             continue
-        seen[key] = seen[x["title"]] = True
+        seen[key] = True
+        if tkey:
+            seen[tkey] = True
         merged.append(x)
     sessions = merged
     known = {s["handle"] for s in sessions}
